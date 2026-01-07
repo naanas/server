@@ -63,37 +63,37 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
     <head>
       <meta charset="UTF-8">
       <style>
-        /* --- 1. SETUP MARGIN KERTAS (KUNCI UTAMA) --- */
+        /* --- 1. SETUP MARGIN KERTAS --- */
         @page {
           size: A4 landscape;
-          /* Margin 4.5cm di SEMUA SISI.
-             Konten akan otomatis mengecil ke tengah. */
-          margin: 4.5cm; 
+          /* Atas: 1.25cm, Kanan-Bawah-Kiri: 4.5cm */
+          margin: 1.25cm 4.5cm 4.5cm 4.5cm; 
         }
 
         @media print {
-          body { -webkit-print-color-adjust: exact; margin: 0; padding: 0; width: 100%; }
-          
-          /* Mencegah header tabel muncul di halaman 2 dst */
+          body { 
+            -webkit-print-color-adjust: exact; 
+            margin: 0; padding: 0; width: 100%;
+          }
           thead { display: table-row-group; } 
-          
           tr { page-break-inside: avoid; }
           .footer-section { page-break-inside: avoid; }
         }
 
-        /* --- 2. STYLE VISUAL --- */
+        /* --- 2. STYLE VISUAL WEB --- */
         body { 
           font-family: Arial, sans-serif;
           background: #fff;
           margin: 0;
+          display: block; 
         }
 
-        /* Container Visual di Web (agar terlihat marginnya) */
-        .preview-container {
+        .preview-wrapper {
+          background: #525659;
           padding: 20px;
+          min-height: 100vh;
           display: flex;
           justify-content: center;
-          background: #525659;
         }
         
         .content-area {
@@ -101,17 +101,17 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
           width: 297mm;
           min-height: 210mm;
           box-sizing: border-box;
-          /* Padding ini hanya simulasi di web, saat print akan ikut @page */
-          padding: 4.5cm; 
+          padding: 1.25cm 4.5cm 4.5cm 4.5cm; 
+          margin: 0 auto;
         }
 
         @media print {
-          .preview-container { padding: 0; background: white; display: block; }
-          .content-area { width: 100%; padding: 0; }
+          .preview-wrapper { padding: 0; background: white; display: block; }
+          .content-area { width: 100%; padding: 0; margin: 0; }
         }
 
         /* --- 3. STYLE TABEL & KONTEN --- */
-        * { font-size: 9px; } /* Font default kecil */
+        * { font-size: 9px; } 
 
         table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 5px; }
         
@@ -121,31 +121,51 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
           vertical-align: middle; 
         }
         
+        /* HEADER TABEL: ABU-ABU */
         th { 
-          background-color: #DBEAFF !important; 
+          background-color: #E0E0E0 !important; 
           font-weight: bold; 
           text-align: center; 
-          height: 25px; /* Tinggi header tabel */
+          height: 25px; 
         }
 
-        /* HEADER */
-        .header-wrap { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2pt solid #00529C; padding-bottom: 5px; margin-bottom: 12px; }
+        /* HEADER SECTION */
+        .header-wrap { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: none; padding-bottom: 5px; margin-bottom: 12px; }
         .logo-img { max-height: 40px; }
         
-        /* INFO */
-        .info-tbl td { border: none !important; padding: 1px 0 !important; }
+        /* INFO TABLE: FIX SPECIFICITY AGAR UNDERLINE MUNCUL */
+        .info-tbl td { border: none !important; padding: 2px 0 !important; }
         
+        /* Selector ini dibuat lebih kuat (.info-tbl + td + .val-cell) */
+        .info-tbl td.val-cell {
+           border-bottom: 1px solid black !important;
+           font-weight: bold;
+           padding-left: 5px !important;
+        }
+
         .fw-bold { font-weight: bold; }
         .ctr { text-align: center; }
         .bg-gray { background-color: #F3F3F3 !important; }
         
         /* FOOTER */
         .footer-section { display: flex; justify-content: space-between; margin-top: 20px; align-items: flex-start; }
-        .recap-tbl { width: 200px; }
+        
+        .recap-tbl { width: auto; min-width: 200px; } 
         .recap-tbl td { text-align: center; }
+        .recap-label { font-weight: bold; }
 
         .sign-area { flex: 1; text-align: center; padding: 0 10px; }
-        .certify-text { font-style: italic; font-weight: bold; font-size: 8px; border: 0.5pt solid black; padding: 3px; display: inline-block; margin-bottom: 10px; }
+        
+        .certify-text { 
+          font-style: italic; 
+          font-weight: bold; 
+          font-size: 8px; 
+          border: none; 
+          padding: 3px 0; 
+          display: block; 
+          text-align: left; 
+          margin-bottom: 10px; 
+        }
         
         .sign-grid { display: flex; justify-content: space-between; font-weight: bold; }
         .sign-name { margin-top: 45px; text-decoration: underline; text-transform: uppercase; }
@@ -158,7 +178,7 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
       </style>
     </head>
     <body>
-      <div class="preview-container">
+      <div class="preview-wrapper">
         <div class="content-area">
           
           <div class="header-wrap">
@@ -172,16 +192,41 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
 
           <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
             <table class="info-tbl" style="width: 48%;">
-              <tr><td width="90">Client Site</td><td width="10">:</td><td class="fw-bold">Divisi Pengembangan Aplikasi TI - PT Pegadaian</td></tr>
-              <tr><td>Work Unit</td><td>:</td><td class="fw-bold">Dept. IT Business Analyst</td></tr>
-              <tr><td>Dept. Head Name</td><td>:</td><td class="fw-bold">Andhar Setiawan</td></tr>
-              <tr><td>Supervisor</td><td>:</td><td class="fw-bold">Lailatul Fitriana R</td></tr>
+              <tr>
+                <td width="90">Client Site</td><td width="10">:</td>
+                <td class="val-cell">Divisi Pengembangan Aplikasi TI - PT Pegadaian</td>
+              </tr>
+              <tr>
+                <td>Work Unit</td><td>:</td>
+                <td class="val-cell">Dept. IT Business Analyst</td>
+              </tr>
+              <tr>
+                <td>Dept. Head Name</td><td>:</td>
+                <td class="val-cell">Andhar Setiawan</td>
+              </tr>
+              <tr>
+                <td>Supervisor</td><td>:</td>
+                <td class="val-cell">Lailatul Fitriana R</td>
+              </tr>
             </table>
+            
             <table class="info-tbl" style="width: 48%;">
-              <tr><td width="90">Squad</td><td width="10">:</td><td class="fw-bold">Squad IT PLATFORM</td></tr>
-              <tr><td>Employee Name</td><td>:</td><td class="fw-bold" style="text-transform:uppercase;">${employee.name}</td></tr>
-              <tr><td>Employee No.</td><td>:</td><td class="fw-bold">POJ42050260</td></tr>
-              <tr><td>Month</td><td>:</td><td class="fw-bold" style="color:#00529C">${periodDisplay}</td></tr>
+              <tr>
+                <td width="90">Squad</td><td width="10">:</td>
+                <td class="val-cell">Squad IT PLATFORM</td>
+              </tr>
+              <tr>
+                <td>Employee Name</td><td>:</td>
+                <td class="val-cell" style="text-transform:uppercase;">${employee.name}</td>
+              </tr>
+              <tr>
+                <td>Employee No.</td><td>:</td>
+                <td class="val-cell">POJ42050260</td>
+              </tr>
+              <tr>
+                <td>Month</td><td>:</td>
+                <td class="val-cell" style="color:#00529C">${periodDisplay}</td>
+              </tr>
             </table>
           </div>
 
@@ -207,7 +252,7 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
             </tbody>
           </table>
 
-          <div style="font-weight:bold; margin: 10px 0 2px 0;">B. Overtime</div>
+          <div style="font-weight:bold; margin: 15px 0 2px 0;">B. Overtime</div>
           <table>
             <thead>
               <tr>
@@ -220,22 +265,57 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
               </tr>
             </thead>
             <tbody>
+              
+              <tr style="height: 20px;">
+                 <td></td><td></td><td></td><td></td><td></td><td></td>
+              </tr>
+              <tr style="height: 20px;">
+                 <td></td><td></td><td></td><td></td><td></td><td></td>
+              </tr>
+
               <tr class="bg-gray" style="font-weight:bold;">
                 <td colspan="3" style="text-align:right; padding-right:10px;">Total Hours Overtime</td><td class="ctr">0</td><td colspan="2" style="background:#E0E0E0"></td>
+              </tr>
+              
+              <tr class="bg-gray" style="font-weight:bold;">
+                <td colspan="3" style="text-align:right; padding-right:10px;">Total Days Overtime</td><td class="ctr">0</td><td colspan="2" style="background:#E0E0E0"></td>
               </tr>
             </tbody>
           </table>
 
           <div class="footer-section">
             <table class="recap-tbl">
-              <tr style="background:#DBEAFF; font-weight:bold;"><td>RECAP</td><td>Hours</td><td>Days</td></tr>
-              <tr><td style="text-align:left; padding-left:5px;">REG - Work Hours</td><td>${totalHours}</td><td>${totalMandays}</td></tr>
-              <tr><td style="text-align:left; padding-left:5px;">OT - Over Time</td><td>0</td><td>0</td></tr>
-              <tr class="bg-gray" style="font-weight:bold;"><td style="text-align:left; padding-left:5px;">Total</td><td>${totalHours}</td><td>${totalMandays}</td></tr>
+              <thead>
+                <tr style="background:#E0E0E0; font-weight:bold;">
+                  <td colspan="2">RECAP</td>
+                  <td width="40">Hours</td>
+                  <td width="40">Days</td>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="recap-label" width="30">REG</td>
+                  <td style="text-align:left; width: auto; white-space: nowrap; padding-right: 5px;">Work Hours</td>
+                  <td>${totalHours}</td>
+                  <td>${totalMandays}</td>
+                </tr>
+                <tr>
+                  <td class="recap-label">OT</td>
+                  <td style="text-align:left;">Over Time</td>
+                  <td>0</td>
+                  <td>0</td>
+                </tr>
+                <tr class="bg-gray" style="font-weight:bold;">
+                  <td colspan="2" style="text-align:center;">Total</td>
+                  <td>${totalHours}</td>
+                  <td>${totalMandays}</td>
+                </tr>
+              </tbody>
             </table>
 
             <div class="sign-area">
               <div class="certify-text">"I CERTIFY THAT THE ABOVE IS A TRUE RECORD OF MY TIME FOR THIS PERIOD FROM ${periodDisplay}"</div>
+              
               <div class="sign-grid">
                 <div><div>Employee</div><div class="sign-name">${employee.name}</div><div style="font-weight:normal; margin-top:2px;">Date: ${signDate}</div></div>
                 <div><div>Supervisor</div><div class="sign-name">LAILATUL FITRIANA R</div><div style="font-weight:normal; margin-top:2px;">Date: ${signDate}</div></div>
