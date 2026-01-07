@@ -40,217 +40,217 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
     const rowSpan = dailyTasks.length;
 
     dailyTasks.forEach((t, index) => {
-      // Style page-break-inside: avoid mencegah baris terpotong di tengah halaman
-      rowsHtml += `<tr style="page-break-inside: avoid;">`;
+      rowsHtml += `<tr>`;
       if (index === 0) {
-        rowsHtml += `<td class="border ctr" rowspan="${rowSpan}">${rowNumber}</td>`;
-        rowsHtml += `<td class="border ctr" rowspan="${rowSpan}">${dayjs(date).format('DD/MM/YYYY')}</td>`;
+        rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${rowNumber}</td>`;
+        rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${dayjs(date).format('DD/MM/YYYY')}</td>`;
       }
-      rowsHtml += `<td class="border px-2 text-left">${t.description}</td>`;
+      rowsHtml += `<td class="text-left" style="padding-left: 5px;">${t.description}</td>`;
       if (index === 0) {
-        rowsHtml += `<td class="border ctr" rowspan="${rowSpan}">1</td>`;
+        rowsHtml += `<td class="ctr" rowspan="${rowSpan}">1</td>`;
       }
-      // word-break: break-all PENTING agar link panjang tidak melebarkan tabel
-      rowsHtml += `<td class="border ctr px-1" style="font-size: 9px; word-break: break-all;">
+      rowsHtml += `<td class="ctr px-1" style="font-size: 8px; word-break: break-all;">
         ${t.ticketLink ? `<a href="${t.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">${t.ticketNumber}</a>` : t.ticketNumber || '-'}
       </td>`;
-      rowsHtml += `<td class="border"></td><td class="border"></td></tr>`;
+      rowsHtml += `<td></td><td></td></tr>`;
     });
     rowNumber++;
   });
 
-  const fillerCount = Math.max(0, 10 - tasks.length);
-  const fillerRows = Array(fillerCount).fill(0).map(() => 
-    `<tr style="height: 24px;"><td class="border"></td><td class="border"></td><td class="border"></td><td class="border"></td><td class="border"></td><td class="border"></td><td class="border"></td></tr>`
-  ).join('');
-
   return `
     <!DOCTYPE html>
-    <html>
+    <html lang="id">
     <head>
-      <title>Timesheet Preview</title>
+      <meta charset="UTF-8">
       <style>
-        /* 1. RESET MARGIN BROWSER */
+        /* --- 1. SETUP MARGIN KERTAS (KUNCI UTAMA) --- */
         @page {
           size: A4 landscape;
-          margin: 0; /* Hapus margin default browser */
-        }
-        
-        /* 2. BODY RESET */
-        body {
-          margin: 0;
-          padding: 0;
-          background-color: #E5E5E5; /* Background abu di preview web */
-          -webkit-print-color-adjust: exact;
+          /* Margin 4.5cm di SEMUA SISI.
+             Konten akan otomatis mengecil ke tengah. */
+          margin: 4.5cm; 
         }
 
-        /* 3. KERTAS A4 FISIK */
-        .sheet {
-          width: 297mm;  /* Lebar A4 Landscape */
-          min-height: 209mm; /* Tinggi A4 Landscape (-1mm toleransi) */
-          margin: 0 auto;
-          background: white;
-          padding: 10mm 15mm; /* Kita atur margin sendiri di sini (Atas/Bawah 10mm, Kiri/Kanan 15mm) */
-          box-sizing: border-box;
-          position: relative;
-          box-shadow: 0 0 10px rgba(0,0,0,0.1); /* Shadow hanya untuk preview web */
-        }
-
-        /* Hapus shadow saat print */
         @media print {
-          body { background: white; }
-          .sheet { box-shadow: none; margin: 0; width: 100%; page-break-after: always; }
+          body { -webkit-print-color-adjust: exact; margin: 0; padding: 0; width: 100%; }
+          
+          /* Mencegah header tabel muncul di halaman 2 dst */
+          thead { display: table-row-group; } 
+          
+          tr { page-break-inside: avoid; }
+          .footer-section { page-break-inside: avoid; }
         }
 
-        /* STYLE UMUM */
-        * { font-family: Arial, Helvetica, sans-serif; }
+        /* --- 2. STYLE VISUAL --- */
+        body { 
+          font-family: Arial, sans-serif;
+          background: #fff;
+          margin: 0;
+        }
+
+        /* Container Visual di Web (agar terlihat marginnya) */
+        .preview-container {
+          padding: 20px;
+          display: flex;
+          justify-content: center;
+          background: #525659;
+        }
         
-        /* TABLE LAYOUT FIXED: Agar kolom nurut sama width yg kita set */
-        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .content-area {
+          background: white;
+          width: 297mm;
+          min-height: 210mm;
+          box-sizing: border-box;
+          /* Padding ini hanya simulasi di web, saat print akan ikut @page */
+          padding: 4.5cm; 
+        }
+
+        @media print {
+          .preview-container { padding: 0; background: white; display: block; }
+          .content-area { width: 100%; padding: 0; }
+        }
+
+        /* --- 3. STYLE TABEL & KONTEN --- */
+        * { font-size: 9px; } /* Font default kecil */
+
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 5px; }
         
         th, td { 
-          border: 0.75pt solid black; /* Border solid tipis tajam */
-          padding: 4px 3px; 
-          font-size: 10px; 
+          border: 0.5pt solid black; 
+          padding: 3px 2px; 
           vertical-align: middle; 
         }
-
+        
         th { 
-          font-weight: bold; 
           background-color: #DBEAFF !important; 
-          text-align: center;
-          font-size: 10.5px;
+          font-weight: bold; 
+          text-align: center; 
+          height: 25px; /* Tinggi header tabel */
         }
 
+        /* HEADER */
+        .header-wrap { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2pt solid #00529C; padding-bottom: 5px; margin-bottom: 12px; }
+        .logo-img { max-height: 40px; }
+        
+        /* INFO */
+        .info-tbl td { border: none !important; padding: 1px 0 !important; }
+        
+        .fw-bold { font-weight: bold; }
         .ctr { text-align: center; }
-        .px-2 { padding-left: 5px; padding-right: 5px; }
         .bg-gray { background-color: #F3F3F3 !important; }
         
-        /* HEADER SECTION */
-        .header-wrap { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2pt solid #00529C; padding-bottom: 8px; margin-bottom: 15px; }
-        
-        /* INFO TABLE (Tanpa Border) */
-        .info-tbl td { border: none !important; padding: 1px 0 !important; font-size: 10px; }
-        .fw-bold { font-weight: bold; }
+        /* FOOTER */
+        .footer-section { display: flex; justify-content: space-between; margin-top: 20px; align-items: flex-start; }
+        .recap-tbl { width: 200px; }
+        .recap-tbl td { text-align: center; }
 
+        .sign-area { flex: 1; text-align: center; padding: 0 10px; }
+        .certify-text { font-style: italic; font-weight: bold; font-size: 8px; border: 0.5pt solid black; padding: 3px; display: inline-block; margin-bottom: 10px; }
+        
+        .sign-grid { display: flex; justify-content: space-between; font-weight: bold; }
+        .sign-name { margin-top: 45px; text-decoration: underline; text-transform: uppercase; }
+        
+        .notes-box { border: 0.5pt solid black; width: 120px; min-height: 60px; padding: 3px; }
+        
+        h1 { font-size: 18px; margin: 0; font-weight: 900; }
+        h2 { font-size: 12px; margin: 2px 0 0 0; }
+        a { text-decoration: none; color: blue; }
       </style>
     </head>
     <body>
-      
-      <div class="sheet">
-        
-        <div class="header-wrap">
-          <div style="width: 20%;">${logoPegadaian ? `<img src="${logoPegadaian}" style="max-height: 45px;">` : ''}</div>
-          <div style="text-align: center; flex: 1;">
-            <h1 style="font-size: 18px; margin: 0; font-weight: 900; color: #333;">MANDAYS CONSUMPTION REPORT</h1>
-            <h2 style="font-size: 13px; margin: 2px 0 0 0; color: #555;">PT Pesonna Optima Jasa</h2>
+      <div class="preview-container">
+        <div class="content-area">
+          
+          <div class="header-wrap">
+            <div style="width: 20%;">${logoPegadaian ? `<img src="${logoPegadaian}" class="logo-img">` : ''}</div>
+            <div style="text-align: center; flex: 1;">
+              <h1>MANDAYS CONSUMPTION REPORT</h1>
+              <h2>PT Pesonna Optima Jasa</h2>
+            </div>
+            <div style="width: 20%; text-align: right;">${logoPoj ? `<img src="${logoPoj}" class="logo-img">` : ''}</div>
           </div>
-          <div style="width: 20%; text-align: right;">${logoPoj ? `<img src="${logoPoj}" style="max-height: 40px;">` : ''}</div>
-        </div>
 
-        <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
-          <div style="width: 48%;">
-            <table class="info-tbl">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+            <table class="info-tbl" style="width: 48%;">
               <tr><td width="90">Client Site</td><td width="10">:</td><td class="fw-bold">Divisi Pengembangan Aplikasi TI - PT Pegadaian</td></tr>
               <tr><td>Work Unit</td><td>:</td><td class="fw-bold">Dept. IT Business Analyst</td></tr>
               <tr><td>Dept. Head Name</td><td>:</td><td class="fw-bold">Andhar Setiawan</td></tr>
               <tr><td>Supervisor</td><td>:</td><td class="fw-bold">Lailatul Fitriana R</td></tr>
             </table>
-          </div>
-          <div style="width: 48%;">
-            <table class="info-tbl">
+            <table class="info-tbl" style="width: 48%;">
               <tr><td width="90">Squad</td><td width="10">:</td><td class="fw-bold">Squad IT PLATFORM</td></tr>
               <tr><td>Employee Name</td><td>:</td><td class="fw-bold" style="text-transform:uppercase;">${employee.name}</td></tr>
               <tr><td>Employee No.</td><td>:</td><td class="fw-bold">POJ42050260</td></tr>
               <tr><td>Month</td><td>:</td><td class="fw-bold" style="color:#00529C">${periodDisplay}</td></tr>
             </table>
           </div>
-        </div>
 
-        <div style="font-weight:bold; margin-bottom:4px; font-size: 11px;">A. Regular</div>
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 35px;">No.</th>
-              <th style="width: 90px;">Date</th>
-              <th>Description</th> <th style="width: 80px;">Duration of Work<br>(Mandays)</th>
-              <th style="width: 180px;">JIRA's Link</th>
-              <th style="width: 90px;">CRF No.</th>
-              <th style="width: 90px;">Ket.</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-            ${fillerRows}
-            <tr class="bg-gray" style="font-weight:bold; height: 26px;">
-              <td colspan="3" style="text-align:right; padding-right:12px;">Total Mandays Reguler</td>
-              <td class="ctr">${totalMandays}</td>
-              <td colspan="3" style="background:#E0E0E0;"></td>
-            </tr>
-          </tbody>
-        </table>
+          <div style="font-weight:bold; margin-bottom:2px;">A. Regular</div>
+          <table>
+            <thead>
+              <tr>
+                <th width="30">No.</th>
+                <th width="70">Date</th>
+                <th>Description</th>
+                <th width="70">Duration of Work<br>(Mandays)</th>
+                <th width="140">JIRA's Link</th>
+                <th width="70">CRF/G-Canvas No.</th>
+                <th width="60">Ket</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+              <tr class="bg-gray" style="font-weight:bold;">
+                <td colspan="3" style="text-align:right; padding-right:10px;">Total Mandays Reguler</td>
+                <td class="ctr">${totalMandays}</td><td colspan="3" style="background:#E0E0E0"></td>
+              </tr>
+            </tbody>
+          </table>
 
-        <div style="font-weight:bold; margin: 15px 0 4px 0; font-size: 11px;">B. Overtime</div>
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 35px;">No.</th>
-              <th style="width: 90px;">Date</th>
-              <th>Description</th>
-              <th style="width: 80px;">Duration of Work<br>(Hours)</th>
-              <th style="width: 180px;">JIRA's Link</th>
-              <th style="width: 180px;">Ket./ No. ST</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr style="height:22px;"><td colspan="6"></td></tr>
-            <tr class="bg-gray" style="font-weight:bold;">
-              <td colspan="3" style="text-align:right; padding-right:12px;">Total Hours Overtime</td>
-              <td class="ctr">0</td>
-              <td colspan="2" style="background:#E0E0E0;"></td>
-            </tr>
-          </tbody>
-        </table>
+          <div style="font-weight:bold; margin: 10px 0 2px 0;">B. Overtime</div>
+          <table>
+            <thead>
+              <tr>
+                <th width="30">No.</th>
+                <th width="70">Date</th>
+                <th>Description</th>
+                <th width="70">Duration of Work<br>(Hours)</th>
+                <th width="140">JIRA's Link</th>
+                <th width="130">Ket./ Nomor Surat Tugas</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="bg-gray" style="font-weight:bold;">
+                <td colspan="3" style="text-align:right; padding-right:10px;">Total Hours Overtime</td><td class="ctr">0</td><td colspan="2" style="background:#E0E0E0"></td>
+              </tr>
+            </tbody>
+          </table>
 
-        <div style="display: flex; justify-content: space-between; margin-top: 20px; page-break-inside: avoid;">
-          
-          <div style="width: 220px;">
-            <table>
-              <tr style="background-color: #DBEAFF; font-weight:bold;" class="ctr"><td>RECAP</td><td>Hours</td><td>Days</td></tr>
-              <tr><td style="padding-left: 8px;">REG - Work Hours</td><td class="ctr">${totalHours}</td><td class="ctr">${totalMandays}</td></tr>
-              <tr><td style="padding-left: 8px;">OT - Over Time</td><td class="ctr">0</td><td class="ctr">0</td></tr>
-              <tr class="bg-gray" style="font-weight:bold;"><td class="ctr">Total</td><td class="ctr">${totalHours}</td><td class="ctr">${totalMandays}</td></tr>
+          <div class="footer-section">
+            <table class="recap-tbl">
+              <tr style="background:#DBEAFF; font-weight:bold;"><td>RECAP</td><td>Hours</td><td>Days</td></tr>
+              <tr><td style="text-align:left; padding-left:5px;">REG - Work Hours</td><td>${totalHours}</td><td>${totalMandays}</td></tr>
+              <tr><td style="text-align:left; padding-left:5px;">OT - Over Time</td><td>0</td><td>0</td></tr>
+              <tr class="bg-gray" style="font-weight:bold;"><td style="text-align:left; padding-left:5px;">Total</td><td>${totalHours}</td><td>${totalMandays}</td></tr>
             </table>
-          </div>
 
-          <div style="flex:1; margin: 0 20px; text-align:center;">
-            <div style="font-style:italic; font-weight:bold; font-size:9px; border:0.75pt solid black; padding:4px; margin-bottom:12px; display:inline-block;">
-              "I CERTIFY THAT THE ABOVE IS A TRUE RECORD OF MY TIME FOR THIS PERIOD FROM ${periodDisplay}"
+            <div class="sign-area">
+              <div class="certify-text">"I CERTIFY THAT THE ABOVE IS A TRUE RECORD OF MY TIME FOR THIS PERIOD FROM ${periodDisplay}"</div>
+              <div class="sign-grid">
+                <div><div>Employee</div><div class="sign-name">${employee.name}</div><div style="font-weight:normal; margin-top:2px;">Date: ${signDate}</div></div>
+                <div><div>Supervisor</div><div class="sign-name">LAILATUL FITRIANA R</div><div style="font-weight:normal; margin-top:2px;">Date: ${signDate}</div></div>
+                <div><div>Dept. Head</div><div class="sign-name">ANDHAR SETIAWAN</div><div style="font-weight:normal; margin-top:2px;">Date: ${signDate}</div></div>
+              </div>
             </div>
-            <div style="display:flex; justify-content:space-between; font-size:10px; font-weight:bold;">
-              <div>
-                <div style="margin-bottom:50px">Employee</div>
-                <div style="text-decoration:underline; text-transform:uppercase;">${employee.name}</div>
-                <div style="font-weight:normal; font-size:9px; margin-top:2px;">Date: ${signDate}</div>
-              </div>
-              <div>
-                <div style="margin-bottom:50px">Supervisor</div>
-                <div style="text-decoration:underline">LAILATUL FITRIANA R</div>
-                <div style="font-weight:normal; font-size:9px; margin-top:2px;">Date: ${signDate}</div>
-              </div>
-              <div>
-                <div style="margin-bottom:50px">Dept. Head</div>
-                <div style="text-decoration:underline">ANDHAR SETIAWAN</div>
-                <div style="font-weight:normal; font-size:9px; margin-top:2px;">Date: ${signDate}</div>
-              </div>
+
+            <div class="notes-box">
+              <div style="font-weight:bold; border-bottom:0.5pt solid black; margin-bottom:3px; padding-bottom:1px;">NOTES:</div>
             </div>
           </div>
 
-          <div style="border:0.75pt solid black; width: 150px; min-height: 80px; padding: 4px;">
-            <div style="font-weight:bold; border-bottom:0.75pt solid black; margin-bottom:5px; font-size: 10px;">NOTES:</div>
-          </div>
-
-        </div> </div> </body>
+        </div>
+      </div>
+    </body>
     </html>
   `;
 };
