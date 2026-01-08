@@ -1,12 +1,17 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { fetchTasksFromSheet } from './sheetService'; // PASTIKAN INI ADA
+import dotenv from 'dotenv'; // Import dotenv
+import { fetchTasksFromSheet } from './sheetService';
 import { generateHtmlPreview } from './htmlGenerator';
 import { generateTimesheet } from './excelGenerator';
-import { EmployeeData } from './types';
+
+// 1. Load Environment Variables
+dotenv.config();
 
 const app = express();
-const PORT = 3000;
+
+// 2. Ambil PORT dari .env (Fallback ke 3000 jika tidak ada)
+const PORT = process.env.PORT;
 
 app.use(cors());
 app.use(express.json());
@@ -14,34 +19,30 @@ app.use(express.json());
 // --- ENDPOINT 1: PREVIEW HTML ---
 app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> => {
   try {
-    // 1. Tangkap Input dari Frontend
-    // 'tasks' disini adalah inputan MANUAL dari form Regular (Tabel A)
     const { employee, tasks: manualTasks, overtimeTasks } = req.body;
     
-    // 2. Ambil Data dari SHEET (CSV) - INI YANG KEMARIN HILANG
-    // Kita gunakan try-catch agar kalau sheet error, manual tetap jalan
+    // Ambil Data Sheet
     let sheetTasks: any[] = [];
     try {
         if (employee.periodStart && employee.periodEnd) {
             sheetTasks = await fetchTasksFromSheet(employee.periodStart, employee.periodEnd);
-            console.log(`Berhasil ambil ${sheetTasks.length} data dari Sheet.`);
+            console.log(`[Preview] Berhasil ambil ${sheetTasks.length} data dari Sheet.`);
         }
     } catch (err) {
-        console.error("Gagal ambil data sheet:", err);
+        console.warn("[Preview] Gagal ambil data sheet:", err);
     }
 
-    // 3. GABUNGKAN DATA (Sheet + Manual)
-    // Data sheet duluan, baru data manual di bawahnya
+    // Gabung Data
     const combinedRegularTasks = [...sheetTasks, ...(manualTasks || [])];
 
-    // 4. Generate HTML dengan data gabungan
+    // Generate HTML
     const htmlString = generateHtmlPreview(employee, combinedRegularTasks, overtimeTasks || []);
 
     res.send(htmlString);
 
   } catch (error) {
-    console.error(error);
-    res.status(500).send('<h2 style="color:red; text-align:center;">Gagal mengambil data preview.</h2>');
+    console.error('Error generating preview:', error);
+    res.status(500).send('<h2 style="color:red; text-align:center;">Gagal membuat preview. Cek console server.</h2>');
   }
 });
 
@@ -50,35 +51,40 @@ app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise
   try {
     const { employee, tasks: manualTasks, overtimeTasks } = req.body;
 
-    // 1. Ambil Data Sheet
+    // Ambil Data Sheet
     let sheetTasks: any[] = [];
     try {
         if (employee.periodStart && employee.periodEnd) {
             sheetTasks = await fetchTasksFromSheet(employee.periodStart, employee.periodEnd);
+            console.log(`[Excel] Berhasil ambil ${sheetTasks.length} data dari Sheet.`);
         }
     } catch (err) {
-        console.error("Gagal ambil data sheet:", err);
+        console.warn("[Excel] Gagal ambil data sheet:", err);
     }
 
-    // 2. Gabung Data
+    // Gabung Data
     const combinedTasks = [...sheetTasks, ...(manualTasks || [])];
+    const hasRegular = combinedTasks.length > 0;
+    const hasOvertime = overtimeTasks && overtimeTasks.length > 0;
 
-    if (combinedTasks.length === 0 && (!overtimeTasks || overtimeTasks.length === 0)) {
+    if (!hasRegular && !hasOvertime) {
         return res.status(404).send('Data kosong (Sheet tidak ada, Manual tidak ada)');
     }
 
-    // 3. Generate Excel
+    // Generate Excel
     const buffer = await generateTimesheet(employee, combinedTasks);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="Timesheet-${employee.name}.xlsx"`);
     res.send(buffer);
+
   } catch (error) {
-    console.error(error);
+    console.error('Error generating Excel:', error);
     res.status(500).send('Error generating excel');
   }
 });
 
+// Start Server dengan PORT dinamis
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

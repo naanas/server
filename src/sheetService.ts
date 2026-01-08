@@ -7,15 +7,11 @@ import customParseFormat from 'dayjs/plugin/customParseFormat';
 // Load plugin format tanggal
 dayjs.extend(customParseFormat);
 
-// --- CONFIG ---
-const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSdJ_MTijEr9OCB1IVZlAlL7aj4rZb9QzMjMua82AL22rJJv6WP2jLzLyEwKgwUlYnfMD2mg3TEzS2i/pub?output=csv';
-const JIRA_BASE_URL = 'https://pegadaian.atlassian.net/browse/';
-
 // Prioritas Format Tanggal
 const POSSIBLE_DATE_FORMATS = [
-  'M/D/YYYY',         // 1/2/2026 (Format Default Sheet US)
+  'M/D/YYYY',         
   'MM/DD/YYYY',       
-  'D/M/YYYY',         // Format Indo
+  'D/M/YYYY',         
   'DD/MM/YYYY',       
   'YYYY-MM-DD',
   'DD-MMM-YYYY',
@@ -24,8 +20,22 @@ const POSSIBLE_DATE_FORMATS = [
 ];
 
 export const fetchTasksFromSheet = async (periodStart: string, periodEnd: string): Promise<Task[]> => {
+  // --- CONFIG (PINDAH KE DALAM FUNGSI) ---
+  // Agar dibaca SETELAH dotenv.config() jalan di index.ts
+  const SHEET_CSV_URL = process.env.SHEET_CSV_URL;
+  const JIRA_BASE_URL = process.env.JIRA_BASE_URL || 'https://pegadaian.atlassian.net/browse/';
+
+  // DEBUG LOG: Cek apakah URL terbaca
+  console.log('--- DEBUG SHEET SERVICE ---');
+  console.log('URL CSV:', SHEET_CSV_URL ? 'Terbaca ✅' : 'KOSONG ❌');
+  
+  if (!SHEET_CSV_URL) {
+    console.error("❌ Error: SHEET_CSV_URL belum diset di file .env");
+    return [];
+  }
+
   try {
-    console.log('--- START FETCHING SHEET ---');
+    console.log(`Fetching data from: ${SHEET_CSV_URL}`);
     const response = await axios.get(SHEET_CSV_URL);
     
     // Parse CSV
@@ -35,7 +45,10 @@ export const fetchTasksFromSheet = async (periodStart: string, periodEnd: string
       trim: true,
     }) as any[]; 
 
-    if (records.length === 0) return [];
+    if (records.length === 0) {
+      console.warn("⚠️ Data CSV kosong atau gagal diparse.");
+      return [];
+    }
 
     // --- 1. DETEKSI KOLOM ---
     const headers = Object.keys(records[0]);
@@ -97,23 +110,23 @@ export const fetchTasksFromSheet = async (periodStart: string, periodEnd: string
 
     const filteredTasks = tasks.filter((t) => {
       const tDate = dayjs(t.date);
+      // Logic inclusive aman
       return (tDate.isAfter(start.subtract(1, 'second')) && tDate.isBefore(end.add(1, 'second')));
     });
 
-    // --- 4. SORTING (ASCENDING) ---
-    // Logika: Tanggal Awal (Lama) -> Tanggal Akhir (Baru)
+    // --- 4. SORTING ---
     filteredTasks.sort((a, b) => {
       const dateA = dayjs(a.date);
       const dateB = dayjs(b.date);
-      return dateA.diff(dateB); // Jika positif, A lebih besar (lebih baru), taruh di bawah
+      return dateA.diff(dateB);
     });
 
-    console.log(`🚀 Data Siap & Terurut: ${filteredTasks.length} tasks`);
+    console.log(`🚀 Data Siap: ${filteredTasks.length} tasks (Range: ${periodStart} s/d ${periodEnd})`);
     
     return filteredTasks;
 
   } catch (error) {
     console.error('Error fetching sheet:', error);
-    throw error;
+    return [];
   }
 };
