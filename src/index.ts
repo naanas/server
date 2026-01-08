@@ -1,115 +1,105 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { fetchTasksFromSheet } from './sheetService';
 import { generateHtmlPreview } from './htmlGenerator';
 import { generateTimesheet } from './excelGenerator';
 
-// 1. Load Environment Variables
-dotenv.config();
-
+// --- CONFIGURATION ---
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// --- 2. CONFIG CORS (PENTING UNTUK VERCEL) ---
-// Mengizinkan akses dari mana saja agar tidak diblokir browser
+// 1. Load Dotenv HANYA jika di Local (Laptop)
+// Di Vercel (Production), ini akan diskip, jadi log "injecting env (0)" hilang.
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
+
+// 2. Config CORS (Agar Frontend bisa akses)
 app.use(cors({
-    origin: '*', // Allow all
+    origin: '*', 
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
     credentials: true
 }));
 
-// --- PERBAIKAN DI SINI (FIX CRASH) ---
-// Syntax '*' bikin crash di versi baru.
-// Kita ganti pakai Regex /(.*)/ agar aman, atau hapus saja baris ini karena app.use(cors()) di atas sudah cukup.
-// Tapi untuk memastikan preflight aman di Vercel, kita pakai Regex:
+// Handle Preflight Request (Pakai Regex agar aman dari crash library)
 app.options(/(.*)/, cors());
 
-// Middleware JSON
+// Middleware Body Parser
 app.use(express.json());
 
-// --- ENDPOINT 1: PREVIEW HTML ---
+// --- ROUTES ---
+
+// Endpoint 1: Preview HTML
 app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> => {
   try {
-    // Tangkap data dari Frontend
     const { employee, tasks: manualTasks, overtimeTasks } = req.body;
     
-    // Ambil Data dari Google Sheet (CSV)
+    // Ambil Data Sheet (Non-Blocking)
     let sheetTasks: any[] = [];
     try {
         if (employee.periodStart && employee.periodEnd) {
             sheetTasks = await fetchTasksFromSheet(employee.periodStart, employee.periodEnd);
-            console.log(`[Preview] Berhasil ambil ${sheetTasks.length} data dari Sheet.`);
         }
     } catch (err) {
-        console.warn("[Preview] Gagal ambil data sheet (cek .env atau koneksi):", err);
+        console.warn("[Preview] Gagal baca sheet (cek env/koneksi):", err);
     }
 
-    // GABUNGKAN DATA: Sheet (atas) + Manual (bawah)
+    // Gabung: Data Sheet di atas, Data Manual di bawah
     const combinedRegularTasks = [...sheetTasks, ...(manualTasks || [])];
 
     // Generate HTML
     const htmlString = generateHtmlPreview(employee, combinedRegularTasks, overtimeTasks || []);
-
     res.send(htmlString);
 
   } catch (error) {
-    console.error('Error generating preview:', error);
-    res.status(500).send('<h2 style="color:red; text-align:center;">Internal Server Error (Preview)</h2>');
+    console.error('Error Preview:', error);
+    res.status(500).send('Server Error');
   }
 });
 
-// --- ENDPOINT 2: DOWNLOAD EXCEL ---
+// Endpoint 2: Generate Excel
 app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise<any> => {
   try {
     const { employee, tasks: manualTasks, overtimeTasks } = req.body;
 
-    // Ambil Data Sheet
     let sheetTasks: any[] = [];
     try {
         if (employee.periodStart && employee.periodEnd) {
             sheetTasks = await fetchTasksFromSheet(employee.periodStart, employee.periodEnd);
-            console.log(`[Excel] Berhasil ambil ${sheetTasks.length} data dari Sheet.`);
         }
     } catch (err) {
-        console.warn("[Excel] Gagal ambil data sheet:", err);
+        console.warn("[Excel] Gagal baca sheet:", err);
     }
 
-    // Gabung Data
     const combinedTasks = [...sheetTasks, ...(manualTasks || [])];
-    
-    // Cek apakah data benar-benar kosong
     const hasRegular = combinedTasks.length > 0;
     const hasOvertime = overtimeTasks && overtimeTasks.length > 0;
 
     if (!hasRegular && !hasOvertime) {
-        return res.status(404).send('Data kosong (Sheet tidak ada, Manual tidak ada)');
+        return res.status(404).send('Data kosong');
     }
 
-    // Generate Excel Buffer
     const buffer = await generateTimesheet(employee, combinedTasks);
 
-    // Set Header untuk Download File
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="Timesheet-${employee.name}.xlsx"`);
     res.send(buffer);
 
   } catch (error) {
-    console.error('Error generating Excel:', error);
-    res.status(500).send('Internal Server Error (Excel)');
+    console.error('Error Excel:', error);
+    res.status(500).send('Server Error');
   }
 });
 
-// --- 3. EXPORT / LISTEN (PENTING UNTUK VERCEL) ---
+// --- SERVER LISTENER ---
 
-// Cek apakah berjalan di local atau production (Vercel)
+// Hanya jalankan app.listen di Local.
+// Di Vercel, export app yang akan dipakai.
 if (process.env.NODE_ENV !== 'production') {
-    // Kalau Local, pakai app.listen
+    const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
-        console.log(`🚀 Server running locally on http://localhost:${PORT}`);
+        console.log(`🚀 Local Server running on http://localhost:${PORT}`);
     });
 }
 
-// Untuk Vercel, kita WAJIB export app
 export default app;
