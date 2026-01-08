@@ -90,7 +90,9 @@ app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise
     res.status(500).send('Server Error');
   }
 });
-
+app.get('/', (req, res) => {
+  res.send('Backend Timesheet is Running! 🚀');
+});
 // --- SERVER LISTENER ---
 
 // Hanya jalankan app.listen di Local.
