@@ -3,17 +3,15 @@ import cors from 'cors';
 import { fetchTasksFromSheet } from './sheetService';
 import { generateHtmlPreview } from './htmlGenerator';
 import { generateTimesheet } from './excelGenerator';
+import { generateProfessionalDescription } from './aiService'; // <--- IMPORT BARU
 
 // --- CONFIGURATION ---
 const app = express();
 
-// 1. Load Dotenv HANYA jika di Local (Laptop)
-// Di Vercel (Production), ini akan diskip, jadi log "injecting env (0)" hilang.
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
 
-// 2. Config CORS (Agar Frontend bisa akses)
 app.use(cors({
     origin: '*', 
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -21,10 +19,7 @@ app.use(cors({
     credentials: true
 }));
 
-// Handle Preflight Request (Pakai Regex agar aman dari crash library)
 app.options(/(.*)/, cors());
-
-// Middleware Body Parser
 app.use(express.json());
 
 // --- ROUTES ---
@@ -34,20 +29,16 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
   try {
     const { employee, tasks: manualTasks, overtimeTasks } = req.body;
     
-    // Ambil Data Sheet (Non-Blocking)
     let sheetTasks: any[] = [];
     try {
         if (employee.periodStart && employee.periodEnd) {
             sheetTasks = await fetchTasksFromSheet(employee.periodStart, employee.periodEnd);
         }
     } catch (err) {
-        console.warn("[Preview] Gagal baca sheet (cek env/koneksi):", err);
+        console.warn("[Preview] Gagal baca sheet:", err);
     }
 
-    // Gabung: Data Sheet di atas, Data Manual di bawah
     const combinedRegularTasks = [...sheetTasks, ...(manualTasks || [])];
-
-    // Generate HTML
     const htmlString = generateHtmlPreview(employee, combinedRegularTasks, overtimeTasks || []);
     res.send(htmlString);
 
@@ -90,13 +81,28 @@ app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise
     res.status(500).send('Server Error');
   }
 });
-app.get('/', (req, res) => {
-  res.send('Backend Timesheet is Running! 🚀');
-});
-// --- SERVER LISTENER ---
 
-// Hanya jalankan app.listen di Local.
-// Di Vercel, export app yang akan dipakai.
+// Endpoint 3: AI Enhance Description (BARU)
+app.post('/api/enhance-description', async (req: Request, res: Response): Promise<any> => {
+    try {
+      const { text } = req.body;
+      if (!text) return res.status(400).send('Text is required');
+  
+      // Panggil AI Service
+      const enhancedText = await generateProfessionalDescription(text);
+      res.json({ text: enhancedText });
+  
+    } catch (error) {
+      console.error('Error enhancing text:', error);
+      res.status(500).send('Failed to enhance text');
+    }
+});
+
+app.get('/', (req, res) => {
+    res.send('Backend Timesheet is Running! 🚀');
+});
+
+// --- SERVER LISTENER ---
 if (process.env.NODE_ENV !== 'production') {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
