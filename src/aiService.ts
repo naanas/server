@@ -1,56 +1,46 @@
-import axios from 'axios';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import dotenv from 'dotenv';
+import path from 'path';
 
-export const generateProfessionalDescription = async (text: string): Promise<string> => {
-  const API_KEY = process.env.GEMINI_API_KEY;
+// Load Env
+const envPath = path.resolve(__dirname, '../.env');
+dotenv.config({ path: envPath });
 
-  if (!API_KEY) {
-    console.error("❌ ERROR: GEMINI_API_KEY is undefined.");
-    return text;
-  }
-  
-  if (!text || text.trim().length < 3) return text;
+// Inisialisasi Google AI
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
-  try {
-    // KITA TEMBAK LANGSUNG KE URL GOOGLE
-    // Model: gemini-1.5-flash (Versi paling ringan & cepat)
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${API_KEY}`;
+export const generateProfessionalDescription = async (originalText: string): Promise<string> => {
+    // Validasi input
+    if (!originalText || originalText.trim().length === 0) return "";
     
-    const prompt = `
-      Ubah deskripsi pekerjaan teknis berikut menjadi bahasa laporan timesheet yang profesional, formal (Bahasa Indonesia).
-      Singkat (1 kalimat). Tanpa tanda kutip.
-      Input: "${text}"
-    `;
-
-    // Request Body sesuai standar REST API Gemini
-    const requestBody = {
-      contents: [{
-        parts: [{
-          text: prompt
-        }]
-      }]
-    };
-
-    const response = await axios.post(url, requestBody, {
-      headers: { 'Content-Type': 'application/json' }
-    });
-
-    // Ambil hasilnya dari struktur JSON Google
-    const candidate = response.data.candidates?.[0];
-    let cleanText = candidate?.content?.parts?.[0]?.text || text;
-
-    // Bersihkan sisa format
-    cleanText = cleanText.trim().replace(/^"|"$/g, '').replace(/\*\*/g, '');
-    
-    console.log("✅ AI Success:", cleanText);
-    return cleanText;
-
-  } catch (error: any) {
-    // Kalau error, kita log detailnya biar tau kenapa
-    if (error.response) {
-      console.error("❌ AI API Error:", error.response.status, error.response.data);
-    } else {
-      console.error("❌ AI Network Error:", error.message);
+    // Cek API Key
+    if (!process.env.GEMINI_API_KEY) {
+        console.warn("⚠️ GEMINI_API_KEY tidak ditemukan di .env");
+        return originalText; // Kembalikan text asli jika tidak ada key
     }
-    return text; // Fallback ke teks asli
-  }
+
+    try {
+        // Gunakan model gemini-1.5-flash (Lebih cepat & murah untuk task ringan)
+        const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
+
+        const prompt = `
+        Rewrite the following timesheet task description to be professional, concise, and formal (Corporate Style).
+        Language: English.
+        Max length: 15 words.
+        Directly output the rewritten text without quotes or explanations.
+
+        Input: "${originalText}"
+        `;
+
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+        
+        // Bersihkan hasil (hapus tanda kutip atau spasi berlebih)
+        return text.replace(/^"|"$/g, '').trim();
+
+    } catch (error) {
+        console.error("❌ Error AI Generation:", error);
+        return originalText; // Fallback ke text asli jika error
+    }
 };
