@@ -1,9 +1,19 @@
-import { Task, EmployeeData } from './types';
 import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
 import fs from 'fs';
 import path from 'path';
 
-// Interface Overtime (Tanpa ticketNumber)
+// Load Plugin Dayjs
+dayjs.extend(customParseFormat);
+
+// --- INTERFACE ---
+interface Task {
+  date: string;
+  description: string;
+  ticketNumber?: string;
+  ticketLink?: string;
+}
+
 interface OvertimeTask {
   date: string;
   description: string;
@@ -12,6 +22,7 @@ interface OvertimeTask {
   remarks: string;
 }
 
+// --- HELPER: Load Image ---
 const getBase64Image = (filename: string) => {
   try {
     const imagePath = path.join(process.cwd(), 'assets', filename);
@@ -22,12 +33,39 @@ const getBase64Image = (filename: string) => {
   } catch (err) { return ''; }
 };
 
+// --- HELPER: Smart Date Parser (LOGIC PENTING BIAR GAK BUG MERGE) ---
+const parseDateKey = (rawDate: string): { key: string; display: string; valid: boolean; timestamp: number } => {
+    if (!rawDate) return { key: 'nodate', display: '-', valid: false, timestamp: 0 };
+    const formats = [
+        'YYYY-MM-DD', 'MM/DD/YYYY', 'DD/MM/YYYY', 'M/D/YYYY', 'D/M/YYYY', 
+        'MM-DD-YYYY', 'DD-MM-YYYY', 'D-MMM-YY', 'D MMM YYYY'
+    ];
+    let d = dayjs(rawDate);
+    if (!d.isValid()) d = dayjs(rawDate, formats, true);
+
+    if (d.isValid()) {
+        return {
+            key: d.format('YYYY-MM-DD'),
+            display: d.format('DD/MM/YYYY'),
+            valid: true,
+            timestamp: d.valueOf()
+        };
+    }
+    // Fallback: Gunakan string asli agar tidak ke-merge sembarangan
+    return {
+        key: `raw-${rawDate.trim()}`,
+        display: rawDate,
+        valid: false,
+        timestamp: 0
+    };
+};
+
 export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks: OvertimeTask[] = []) => {
   const logoPegadaian = getBase64Image('logo-pegadaian.png'); 
   const logoPoj = getBase64Image('logo-poj.png');             
 
   // Format Data Karyawan
-  const signDate = dayjs(employee.periodEnd).format('DD/MM/YYYY');
+  const signDate = employee.periodEnd ? dayjs(employee.periodEnd).format('DD/MM/YYYY') : '-';
   const clientSite = employee.clientSite || 'Divisi Pengembangan Aplikasi TI - PT Pegadaian';
   const workUnit = employee.workUnit || 'Dept. IT Business Analyst';
   const deptHead = employee.deptHead || 'Andhar Setiawan';
@@ -36,56 +74,70 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
   const employeeNo = employee.no || 'POJ42050260';
   
   let periodDisplay = employee.month;
-  if (!periodDisplay) {
+  if (!periodDisplay && employee.periodStart && employee.periodEnd) {
       const startMonth = dayjs(employee.periodStart).format('MMMM').toUpperCase();
       const endMonth = dayjs(employee.periodEnd).format('MMMM').toUpperCase();
       periodDisplay = startMonth === endMonth ? startMonth : `${startMonth} TO ${endMonth}`;
+  } else if (!periodDisplay) {
+      periodDisplay = '-';
   }
 
-  // --- LOGIC TABEL A (REGULAR) ---
-  const groupedTasks: { [date: string]: Task[] } = {};
-  tasks.forEach(task => {
-    if (!groupedTasks[task.date]) groupedTasks[task.date] = [];
-    groupedTasks[task.date].push(task);
+  // ============================================================
+  // LOGIC TABEL A (REGULAR) - FIXED MERGING & SORTING
+  // ============================================================
+  const groupedTasks: { [key: string]: { tasks: Task[], meta: any } } = {};
+  
+  // 1. Grouping dengan Smart Parser
+  tasks.forEach((task) => {
+    const { key, display, valid, timestamp } = parseDateKey(task.date);
+    if (!groupedTasks[key]) {
+        groupedTasks[key] = { tasks: [], meta: { display, valid, timestamp } };
+    }
+    groupedTasks[key].tasks.push(task);
   });
-  const uniqueDays = Object.keys(groupedTasks);
-  const totalMandays = uniqueDays.length;
+  
+  // 2. Sorting Keys
+  const sortedKeys = Object.keys(groupedTasks).sort((a, b) => groupedTasks[a].meta.timestamp - groupedTasks[b].meta.timestamp);
+  
+  // 3. Hitung
+  const totalMandays = sortedKeys.length;
   const totalHours = totalMandays * 8;
   
   let rowsHtml = '';
   let rowNumber = 1;
-  uniqueDays.forEach((date) => {
-    const dailyTasks = groupedTasks[date];
-    const rowSpan = dailyTasks.length;
+  
+  // 4. Generate HTML Rows
+  sortedKeys.forEach((key) => {
+    const group = groupedTasks[key];
+    const dailyTasks = group.tasks;
+    const rowSpan = dailyTasks.length; 
+    
     dailyTasks.forEach((t, index) => {
       rowsHtml += `<tr>`;
       if (index === 0) {
         rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${rowNumber}</td>`;
-        rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${dayjs(date).format('DD/MM/YYYY')}</td>`;
+        rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${group.meta.display}</td>`;
       }
       rowsHtml += `<td class="text-left" style="padding-left: 5px;">${t.description}</td>`;
       if (index === 0) {
         rowsHtml += `<td class="ctr" rowspan="${rowSpan}">1</td>`;
       }
       
-      // FIX TABEL A: Ambil ticketNumber dari frontend
-      // Kita gunakan (t as any) jaga-jaga kalau interface Task belum diupdate
-      const ticketNum = (t as any).ticketNumber || '';
-      
+      const ticketNum = t.ticketNumber || '';
       const ticketDisplayA = t.ticketLink 
         ? `<a href="${t.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">${ticketNum || 'Link'}</a>` 
         : ticketNum || '-';
 
-      rowsHtml += `<td class="ctr px-1" style="font-size: 8px; word-break: break-all;">
-        ${ticketDisplayA}
-      </td>`;
+      rowsHtml += `<td class="ctr px-1" style="font-size: 8px; word-break: break-all;">${ticketDisplayA}</td>`;
       rowsHtml += `<td></td><td></td></tr>`;
     });
     rowNumber++;
   });
 
 
-  // --- LOGIC TABEL B (OVERTIME) ---
+  // ==========================================
+  // LOGIC TABEL B (OVERTIME)
+  // ==========================================
   let totalOtHours = 0;
   const otDates = new Set();
   let otRowsHtml = '';
@@ -95,14 +147,15 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
      otRowsHtml += `<tr style="height: 20px;"><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
      otRowsHtml += `<tr style="height: 20px;"><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
   } else {
+    // Sort Overtime
+    overtimeTasks.sort((a, b) => parseDateKey(a.date).timestamp - parseDateKey(b.date).timestamp);
+
     overtimeTasks.forEach((ot) => {
        const dur = parseFloat(String(ot.duration)) || 0;
        totalOtHours += dur;
        if(ot.date) otDates.add(ot.date);
 
-       const dateDisplay = ot.date ? dayjs(ot.date).format('DD/MM/YYYY') : '';
-       
-       // TABLE B: HANYA LINK (KARENA BATB DIHAPUS)
+       const { display: dateDisplay } = parseDateKey(ot.date);
        const ticketDisplayB = ot.ticketLink 
           ? `<a href="${ot.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">Link</a>` 
           : '-';
@@ -118,26 +171,39 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
        otRowNumber++;
     });
   }
-  
   const totalOtDays = otDates.size;
 
+  // --- RETURN HTML (CSS SESUAI PERMINTAAN) ---
   return `
     <!DOCTYPE html>
     <html lang="id">
     <head>
       <meta charset="UTF-8">
       <style>
+        /* CSS DARI CODE KAMU */
         @page { size: A4 landscape; margin: 2cm 4.5cm 2cm 4.5cm; }
+        
         @media print {
           body { -webkit-print-color-adjust: exact; margin: 0; padding: 0; width: 100%; }
           thead { display: table-row-group; } 
           tr { page-break-inside: avoid; }
           .footer-section { page-break-inside: avoid; }
         }
+        
         body { font-family: Arial, sans-serif; background: #fff; margin: 0; display: block; }
         
         .preview-wrapper { background: #525659; padding: 20px; min-height: 100vh; display: flex; justify-content: center; }
-        .content-area { background: white; width: 297mm; min-height: 210mm; box-sizing: border-box; padding: 1.25cm 4.5cm 4.5cm 4.5cm; margin: 0 auto; }
+        
+        /* PADDING DISESUAIKAN SEPERTI REQUEST */
+        .content-area { 
+            background: white; 
+            width: 297mm; 
+            min-height: 210mm; 
+            box-sizing: border-box; 
+            padding: 1.25cm 4.5cm 4.5cm 4.5cm; 
+            margin: 0 auto; 
+        }
+        
         @media print { .preview-wrapper { padding: 0; background: white; display: block; } .content-area { width: 100%; padding: 0; margin: 0; } }
         
         * { font-size: 9px; } 
