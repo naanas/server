@@ -127,7 +127,7 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
     <head>
       <meta charset="UTF-8">
       <style>
-        @page { size: A4 landscape; margin: 1.25cm 4.5cm 4.5cm 4.5cm; }
+        @page { size: A4 landscape; margin: 2cm 4.5cm 2cm 4.5cm; }
         @media print {
           body { -webkit-print-color-adjust: exact; margin: 0; padding: 0; width: 100%; }
           thead { display: table-row-group; } 
