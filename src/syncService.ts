@@ -10,8 +10,7 @@ dotenv.config({ path: envPath });
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-const SHEET_URL = process.env.GOOGLE_SHEET_CSV_URL;
-// Ambil Base URL JIRA
+const SHEET_URL = process.env.SHEET_CSV_URL;
 const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
 
 const supabase = createClient(supabaseUrl || '', supabaseKey || '', {
@@ -36,6 +35,13 @@ const getValue = (row: any, possibleKeys: string[]) => {
 };
 
 export const syncCsvToSupabase = async () => {
+    // --- DEBUGGING LOGS ---
+    console.log("-------------------------------------------------");
+    console.log("🔍 DEBUG SYNC CONFIG:");
+    console.log("🔗 SHEET_URL:", SHEET_URL ? "✅ OK" : "❌ MISSING");
+    console.log("🔗 JIRA_BASE_URL:", JIRA_BASE_URL ? `✅ OK (${JIRA_BASE_URL})` : "❌ MISSING / UNDEFINED");
+    console.log("-------------------------------------------------");
+
     if (!SHEET_URL) throw new Error("GOOGLE_SHEET_CSV_URL missing");
 
     console.log("🔄 Starting Sync Process...");
@@ -57,7 +63,7 @@ export const syncCsvToSupabase = async () => {
 
     console.log(`📥 Downloaded ${csvRows.length} rows. Checking DB...`);
 
-    // 2. Cek Data Existing (Pagination)
+    // 2. Cek Data Existing
     const existingSignatures = new Set();
     const pageSize = 10000;
     let page = 0;
@@ -82,28 +88,37 @@ export const syncCsvToSupabase = async () => {
     // 3. Filter & Construct Data
     const newRecords: any[] = [];
     
+    // Debug flag agar log tidak spam (cuma muncul sekali)
+    let debugRowPrinted = false;
+
     for (const row of csvRows) {
-        // Ambil data dasar
         const date = getValue(row, ['start date (batb)', 'start date', 'date', 'tanggal']);
         const desc = getValue(row, ['description', 'summary', 'deskripsi', 'task']);
         const reporter = getValue(row, ['reporters', 'reporter', 'assignee', 'owner']);
-        const ticketNum = getValue(row, ['ticket number', 'issue key', 'key']);
+        // Tambahkan variasi header tiket
+        const ticketNum = getValue(row, ['ticket number', 'issue key', 'key', 'issue id', 'no tiket']); 
         
-        // Ambil link asli dari CSV (sebagai fallback)
+        // CSV Link fallback
         const csvLink = getValue(row, ['ticket link', 'link', 'url']);
 
         if (!date || !desc || !reporter) continue;
 
-        // --- LOGIC BARU: CREATE JIRA LINK ---
-        let finalLink = csvLink; // Default pakai link CSV
+        // --- LOGIC JIRA LINK ---
+        let finalLink = csvLink; 
         
         if (ticketNum && JIRA_BASE_URL) {
-            // Bersihkan Base URL (pastikan diakhiri /)
             const baseUrl = JIRA_BASE_URL.endsWith('/') ? JIRA_BASE_URL : `${JIRA_BASE_URL}/`;
-            // Gabungkan: URL + TicketNumber
             finalLink = `${baseUrl}${ticketNum}`;
         }
-        // ------------------------------------
+        
+        // DEBUG: Cek 1 baris pertama yang punya tiket
+        if (!debugRowPrinted && ticketNum) {
+            console.log("🔍 [DEBUG ROW] Sample Ticket Logic:");
+            console.log(`   - Ticket Num Found: ${ticketNum}`);
+            console.log(`   - Generated Link: ${finalLink}`);
+            debugRowPrinted = true;
+        }
+        // -----------------------
 
         const signature = `${date}|${desc}|${reporter}|${ticketNum}`.toLowerCase();
 
@@ -114,7 +129,7 @@ export const syncCsvToSupabase = async () => {
                 reporter: reporter,
                 assignee: reporter,
                 ticket_number: ticketNum,
-                ticket_link: finalLink, // Simpan Link hasil gabungan
+                ticket_link: finalLink,
                 raw_signature: signature
             });
             existingSignatures.add(signature);

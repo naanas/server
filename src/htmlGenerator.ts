@@ -33,7 +33,7 @@ const getBase64Image = (filename: string) => {
   } catch (err) { return ''; }
 };
 
-// --- HELPER: Smart Date Parser (LOGIC PENTING BIAR GAK BUG MERGE) ---
+// --- HELPER: Smart Date Parser ---
 const parseDateKey = (rawDate: string): { key: string; display: string; valid: boolean; timestamp: number } => {
     if (!rawDate) return { key: 'nodate', display: '-', valid: false, timestamp: 0 };
     const formats = [
@@ -51,7 +51,6 @@ const parseDateKey = (rawDate: string): { key: string; display: string; valid: b
             timestamp: d.valueOf()
         };
     }
-    // Fallback: Gunakan string asli agar tidak ke-merge sembarangan
     return {
         key: `raw-${rawDate.trim()}`,
         display: rawDate,
@@ -83,11 +82,11 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
   }
 
   // ============================================================
-  // LOGIC TABEL A (REGULAR) - FIXED MERGING & SORTING
+  // LOGIC TABEL A (REGULAR)
   // ============================================================
   const groupedTasks: { [key: string]: { tasks: Task[], meta: any } } = {};
   
-  // 1. Grouping dengan Smart Parser
+  // 1. Grouping
   tasks.forEach((task) => {
     const { key, display, valid, timestamp } = parseDateKey(task.date);
     if (!groupedTasks[key]) {
@@ -96,33 +95,50 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
     groupedTasks[key].tasks.push(task);
   });
   
-  // 2. Sorting Keys
+  // 2. Sorting
   const sortedKeys = Object.keys(groupedTasks).sort((a, b) => groupedTasks[a].meta.timestamp - groupedTasks[b].meta.timestamp);
   
-  // 3. Hitung
-  const totalMandays = sortedKeys.length;
-  const totalHours = totalMandays * 8;
-  
+  // 3. Generate HTML & Kalkulasi Mandays (Real-time Calculation)
   let rowsHtml = '';
   let rowNumber = 1;
+  let totalMandays = 0; // Counter Mandays
   
-  // 4. Generate HTML Rows
   sortedKeys.forEach((key) => {
     const group = groupedTasks[key];
     const dailyTasks = group.tasks;
     const rowSpan = dailyTasks.length; 
     
+    // --- LOGIC CUTI ---
+    // Cek apakah ada task di hari ini yang mengandung kata "CUTI"
+    const isCuti = dailyTasks.some(t => 
+        (t.description || '').toLowerCase().includes('cuti')
+    );
+
+    // Jika BUKAN cuti, tambahkan ke total
+    if (!isCuti) {
+        totalMandays += 1;
+    }
+
     dailyTasks.forEach((t, index) => {
       rowsHtml += `<tr>`;
+      
+      // Merge Column: No & Date
       if (index === 0) {
         rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${rowNumber}</td>`;
         rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${group.meta.display}</td>`;
       }
+      
+      // Column: Description
       rowsHtml += `<td class="text-left" style="padding-left: 5px;">${t.description}</td>`;
+      
+      // Merge Column: Mandays
       if (index === 0) {
-        rowsHtml += `<td class="ctr" rowspan="${rowSpan}">1</td>`;
+        // Jika CUTI, kosongkan. Jika KERJA, tulis 1.
+        const mandayValue = isCuti ? '' : '1';
+        rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${mandayValue}</td>`;
       }
       
+      // Column: JIRA Link
       const ticketNum = t.ticketNumber || '';
       const ticketDisplayA = t.ticketLink 
         ? `<a href="${t.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">${ticketNum || 'Link'}</a>` 
@@ -131,8 +147,12 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
       rowsHtml += `<td class="ctr px-1" style="font-size: 8px; word-break: break-all;">${ticketDisplayA}</td>`;
       rowsHtml += `<td></td><td></td></tr>`;
     });
+    
     rowNumber++;
   });
+
+  // Hitung Total Hours berdasarkan Mandays yang valid (bukan cuti)
+  const totalHours = totalMandays * 8;
 
 
   // ==========================================
@@ -147,7 +167,6 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
      otRowsHtml += `<tr style="height: 20px;"><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
      otRowsHtml += `<tr style="height: 20px;"><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
   } else {
-    // Sort Overtime
     overtimeTasks.sort((a, b) => parseDateKey(a.date).timestamp - parseDateKey(b.date).timestamp);
 
     overtimeTasks.forEach((ot) => {
@@ -173,14 +192,14 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
   }
   const totalOtDays = otDates.size;
 
-  // --- RETURN HTML (CSS SESUAI PERMINTAAN) ---
+  // --- RETURN HTML ---
   return `
     <!DOCTYPE html>
     <html lang="id">
     <head>
       <meta charset="UTF-8">
       <style>
-        /* CSS DARI CODE KAMU */
+        /* CSS LAYOUT */
         @page { size: A4 landscape; margin: 2cm 4.5cm 2cm 4.5cm; }
         
         @media print {
@@ -194,7 +213,6 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
         
         .preview-wrapper { background: #525659; padding: 20px; min-height: 100vh; display: flex; justify-content: center; }
         
-        /* PADDING DISESUAIKAN SEPERTI REQUEST */
         .content-area { 
             background: white; 
             width: 297mm; 
