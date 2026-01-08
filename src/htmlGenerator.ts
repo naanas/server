@@ -66,7 +66,8 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
         /* --- 1. SETUP MARGIN KERTAS --- */
         @page {
           size: A4 landscape;
-          /* Atas: 1.25cm, Kanan-Bawah-Kiri: 4.5cm */
+          /* Atas: 1.25cm
+             Kanan, Bawah, Kiri: 4.5cm */
           margin: 1.25cm 4.5cm 4.5cm 4.5cm; 
         }
 
@@ -101,6 +102,7 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
           width: 297mm;
           min-height: 210mm;
           box-sizing: border-box;
+          /* Padding preview disamakan dengan @page */
           padding: 1.25cm 4.5cm 4.5cm 4.5cm; 
           margin: 0 auto;
         }
@@ -121,7 +123,7 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
           vertical-align: middle; 
         }
         
-        /* HEADER TABEL: ABU-ABU */
+        /* HEADER TABEL: ABU-ABU (#E0E0E0) */
         th { 
           background-color: #E0E0E0 !important; 
           font-weight: bold; 
@@ -133,10 +135,10 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
         .header-wrap { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: none; padding-bottom: 5px; margin-bottom: 12px; }
         .logo-img { max-height: 40px; }
         
-        /* INFO TABLE: FIX SPECIFICITY AGAR UNDERLINE MUNCUL */
+        /* INFO TABLE STYLE */
         .info-tbl td { border: none !important; padding: 2px 0 !important; }
         
-        /* Selector ini dibuat lebih kuat (.info-tbl + td + .val-cell) */
+        /* FIX: Selector CSS diperkuat agar underline muncul */
         .info-tbl td.val-cell {
            border-bottom: 1px solid black !important;
            font-weight: bold;
@@ -150,6 +152,7 @@ export const generateHtmlPreview = (employee: EmployeeData, tasks: Task[]) => {
         /* FOOTER */
         .footer-section { display: flex; justify-content: space-between; margin-top: 20px; align-items: flex-start; }
         
+        /* Recap Table */
         .recap-tbl { width: auto; min-width: 200px; } 
         .recap-tbl td { text-align: center; }
         .recap-label { font-weight: bold; }
