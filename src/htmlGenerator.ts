@@ -63,6 +63,11 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
   const logoPegadaian = getBase64Image('logo-pegadaian.png'); 
   const logoPoj = getBase64Image('logo-poj.png');             
 
+  // --- LOGIC DISPLAY NAME ---
+  const displayName = (employee.reportName && employee.reportName.trim() !== '') 
+                      ? employee.reportName 
+                      : employee.name;
+
   // Format Data Karyawan
   const signDate = employee.periodEnd ? dayjs(employee.periodEnd).format('DD/MM/YYYY') : '-';
   const clientSite = employee.clientSite || 'Divisi Pengembangan Aplikasi TI - PT Pegadaian';
@@ -81,64 +86,39 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
       periodDisplay = '-';
   }
 
-  // ============================================================
-  // LOGIC TABEL A (REGULAR)
-  // ============================================================
+  // LOGIC TABEL A
   const groupedTasks: { [key: string]: { tasks: Task[], meta: any } } = {};
-  
-  // 1. Grouping
   tasks.forEach((task) => {
     const { key, display, valid, timestamp } = parseDateKey(task.date);
-    if (!groupedTasks[key]) {
-        groupedTasks[key] = { tasks: [], meta: { display, valid, timestamp } };
-    }
+    if (!groupedTasks[key]) groupedTasks[key] = { tasks: [], meta: { display, valid, timestamp } };
     groupedTasks[key].tasks.push(task);
   });
   
-  // 2. Sorting
   const sortedKeys = Object.keys(groupedTasks).sort((a, b) => groupedTasks[a].meta.timestamp - groupedTasks[b].meta.timestamp);
   
-  // 3. Generate HTML & Kalkulasi Mandays (Real-time Calculation)
   let rowsHtml = '';
   let rowNumber = 1;
-  let totalMandays = 0; // Counter Mandays
+  let totalMandays = 0; 
   
   sortedKeys.forEach((key) => {
     const group = groupedTasks[key];
     const dailyTasks = group.tasks;
     const rowSpan = dailyTasks.length; 
     
-    // --- LOGIC CUTI ---
-    // Cek apakah ada task di hari ini yang mengandung kata "CUTI"
-    const isCuti = dailyTasks.some(t => 
-        (t.description || '').toLowerCase().includes('cuti')
-    );
-
-    // Jika BUKAN cuti, tambahkan ke total
-    if (!isCuti) {
-        totalMandays += 1;
-    }
+    const isCuti = dailyTasks.some(t => (t.description || '').toLowerCase().includes('cuti'));
+    if (!isCuti) totalMandays += 1;
 
     dailyTasks.forEach((t, index) => {
       rowsHtml += `<tr>`;
-      
-      // Merge Column: No & Date
       if (index === 0) {
         rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${rowNumber}</td>`;
         rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${group.meta.display}</td>`;
       }
-      
-      // Column: Description
       rowsHtml += `<td class="text-left" style="padding-left: 5px;">${t.description}</td>`;
-      
-      // Merge Column: Mandays
       if (index === 0) {
-        // Jika CUTI, kosongkan. Jika KERJA, tulis 1.
         const mandayValue = isCuti ? '' : '1';
         rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${mandayValue}</td>`;
       }
-      
-      // Column: JIRA Link
       const ticketNum = t.ticketNumber || '';
       const ticketDisplayA = t.ticketLink 
         ? `<a href="${t.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">${ticketNum || 'Link'}</a>` 
@@ -147,17 +127,12 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
       rowsHtml += `<td class="ctr px-1" style="font-size: 8px; word-break: break-all;">${ticketDisplayA}</td>`;
       rowsHtml += `<td></td><td></td></tr>`;
     });
-    
     rowNumber++;
   });
 
-  // Hitung Total Hours berdasarkan Mandays yang valid (bukan cuti)
   const totalHours = totalMandays * 8;
 
-
-  // ==========================================
-  // LOGIC TABEL B (OVERTIME)
-  // ==========================================
+  // LOGIC TABEL B
   let totalOtHours = 0;
   const otDates = new Set();
   let otRowsHtml = '';
@@ -168,17 +143,14 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
      otRowsHtml += `<tr style="height: 20px;"><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
   } else {
     overtimeTasks.sort((a, b) => parseDateKey(a.date).timestamp - parseDateKey(b.date).timestamp);
-
     overtimeTasks.forEach((ot) => {
        const dur = parseFloat(String(ot.duration)) || 0;
        totalOtHours += dur;
        if(ot.date) otDates.add(ot.date);
-
        const { display: dateDisplay } = parseDateKey(ot.date);
        const ticketDisplayB = ot.ticketLink 
           ? `<a href="${ot.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">Link</a>` 
           : '-';
-
        otRowsHtml += `<tr>
          <td class="ctr">${otRowNumber}</td>
          <td class="ctr">${dateDisplay}</td>
@@ -192,48 +164,37 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
   }
   const totalOtDays = otDates.size;
 
-  // --- RETURN HTML ---
   return `
     <!DOCTYPE html>
     <html lang="id">
     <head>
       <meta charset="UTF-8">
       <style>
-        /* CSS LAYOUT */
         @page { size: A4 landscape; margin: 2cm 4.5cm 2cm 4.5cm; }
-        
         @media print {
           body { -webkit-print-color-adjust: exact; margin: 0; padding: 0; width: 100%; }
           thead { display: table-row-group; } 
           tr { page-break-inside: avoid; }
           .footer-section { page-break-inside: avoid; }
         }
-        
         body { font-family: Arial, sans-serif; background: #fff; margin: 0; display: block; }
         
         .preview-wrapper { background: #525659; padding: 20px; min-height: 100vh; display: flex; justify-content: center; }
-        
-        .content-area { 
-            background: white; 
-            width: 297mm; 
-            min-height: 210mm; 
-            box-sizing: border-box; 
-            padding: 1.25cm 4.5cm 4.5cm 4.5cm; 
-            margin: 0 auto; 
-        }
-        
+        .content-area { background: white; width: 297mm; min-height: 210mm; box-sizing: border-box; padding: 1.25cm 4.5cm 4.5cm 4.5cm; margin: 0 auto; }
         @media print { .preview-wrapper { padding: 0; background: white; display: block; } .content-area { width: 100%; padding: 0; margin: 0; } }
         
         * { font-size: 9px; } 
         table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 5px; }
-        th, td { border: 0.5pt solid black; padding: 3px 2px; vertical-align: middle; }
+        
+        /* GENERAL TABLE BORDER: 0.1pt */
+        th, td { border: 0.1pt solid black; padding: 3px 2px; vertical-align: middle; }
         th { background-color: #E0E0E0 !important; font-weight: bold; text-align: center; height: 25px; }
         
         .header-wrap { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: none; padding-bottom: 5px; margin-bottom: 12px; }
         .logo-img { max-height: 40px; }
         
         .info-tbl td { border: none !important; padding: 2px 0 !important; }
-        .info-tbl td.val-cell { border-bottom: 1px solid black !important; font-weight: bold; padding-left: 5px !important; }
+        .info-tbl td.val-cell { border-bottom: 0.1pt solid black !important; font-weight: bold; padding-left: 5px !important; }
         
         .fw-bold { font-weight: bold; }
         .ctr { text-align: center; }
@@ -245,11 +206,49 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
         .recap-label { font-weight: bold; }
         
         .sign-area { flex: 1; text-align: center; padding: 0 10px; }
-        .certify-text { font-style: italic; font-weight: bold; font-size: 8px; border: none; padding: 3px 0; display: block; text-align: left; margin-bottom: 10px; }
-        .sign-grid { display: flex; justify-content: space-between; font-weight: bold; }
-        .sign-name { margin-top: 45px; text-decoration: underline; text-transform: uppercase; }
+        .certify-text { font-style: italic; font-size: 8px; border: none; padding: 3px 0; display: block; text-align: left; margin-bottom: 5px; }
+
+        /* --- STYLING BARU UNTUK TANDA TANGAN --- */
+        .sign-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
         
-        .notes-box { border: 0.5pt solid black; width: 120px; min-height: 60px; padding: 3px; }
+        /* RESET BORDER DEFAULT UNTUK TABEL TANDA TANGAN */
+        .sign-table td {
+             border: none;
+             padding: 0;
+             vertical-align: bottom; /* Agar konten kedorong ke bawah */
+        }
+
+        /* SEPARATOR VERTICAL (Garis tegak antar kolom) */
+        /* Pilih sel ke-2 (Supervisor) dan ke-3 (Dept Head) */
+        .sign-table td + td {
+            border-left: 0.5pt solid black;
+        }
+
+        /* CONTAINER JUDUL (Atas) */
+        .sign-title-box {
+            text-align: center;
+            font-weight: bold;
+            padding: 5px;
+            /* Tidak ada border bawah disini */
+        }
+
+        /* SPACER (Ruang Kosong buat Tanda Tangan) */
+        .sign-spacer {
+            height: 40px; /* Atur tinggi ruang tanda tangan disini */
+        }
+
+        /* CONTAINER NAMA (Bawah) - GARIS DI SINI */
+        .sign-name-box {
+            text-align: center;
+            border-top: 0.5pt solid black; /* INI GARIS HORIZONTAL DI ATAS NAMA */
+            padding: 2px 0 5px 0;
+            margin: 0 5px; /* Sedikit jarak kiri kanan biar garis gak nempel banget sama garis vertikal */
+        }
+
+        .sign-name { text-decoration: underline; font-weight: bold; text-transform: uppercase; }
+        .sign-date { font-weight: normal; margin-top: 2px; font-size: 8px; }
+        
+        .notes-box { border: 0.1pt solid black; width: 120px; min-height: 60px; padding: 3px; }
         
         h1 { font-size: 18px; margin: 0; font-weight: 900; }
         h2 { font-size: 12px; margin: 2px 0 0 0; }
@@ -259,7 +258,6 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
     <body>
       <div class="preview-wrapper">
         <div class="content-area">
-          
           <div class="header-wrap">
             <div style="width: 20%;">${logoPegadaian ? `<img src="${logoPegadaian}" class="logo-img">` : ''}</div>
             <div style="text-align: center; flex: 1;">
@@ -278,7 +276,7 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
             </table>
             <table class="info-tbl" style="width: 48%;">
               <tr><td width="90">Squad</td><td width="10">:</td><td class="val-cell">${squad}</td></tr>
-              <tr><td>Employee Name</td><td>:</td><td class="val-cell" style="text-transform:uppercase;">${employee.name}</td></tr>
+              <tr><td>Employee Name</td><td>:</td><td class="val-cell" style="text-transform:uppercase;">${displayName}</td></tr>
               <tr><td>Employee No.</td><td>:</td><td class="val-cell">${employeeNo}</td></tr>
               <tr><td>Month</td><td>:</td><td class="val-cell" style="color:#00529C">${periodDisplay}</td></tr>
             </table>
@@ -333,19 +331,44 @@ export const generateHtmlPreview = (employee: any, tasks: Task[], overtimeTasks:
             </table>
 
             <div class="sign-area">
-              <div class="certify-text">"I CERTIFY THAT THE ABOVE IS A TRUE RECORD OF MY TIME FOR THIS PERIOD FROM ${periodDisplay}"</div>
-              <div class="sign-grid">
-                <div><div>Employee</div><div class="sign-name">${employee.name}</div><div style="font-weight:normal; margin-top:2px;">Date: ${signDate}</div></div>
-                <div><div>Supervisor</div><div class="sign-name">${supervisor}</div><div style="font-weight:normal; margin-top:2px;">Date: ${signDate}</div></div>
-                <div><div>Dept. Head</div><div class="sign-name">${deptHead}</div><div style="font-weight:normal; margin-top:2px;">Date: ${signDate}</div></div>
-              </div>
+              <div class="certify-text">"I CERTIFY THAT THE ABOVE IS A TRUE RECORD OF MY TIME FOR THIS PERIOD FROM <b>${periodDisplay}</b>"</div>
+              
+              <table class="sign-table">
+                <tr>
+                    <td>
+                        <div class="sign-title-box">Employee</div>
+                        <div class="sign-spacer"></div>
+                        <div class="sign-name-box">
+                            <div class="sign-name">${displayName}</div>
+                            <div class="sign-date">Date: ${signDate}</div>
+                        </div>
+                    </td>
+
+                    <td>
+                        <div class="sign-title-box">Supervisor</div>
+                        <div class="sign-spacer"></div>
+                        <div class="sign-name-box">
+                            <div class="sign-name">${supervisor}</div>
+                            <div class="sign-date">Date: ${signDate}</div>
+                        </div>
+                    </td>
+
+                    <td>
+                        <div class="sign-title-box">Dept. Head</div>
+                        <div class="sign-spacer"></div>
+                        <div class="sign-name-box">
+                            <div class="sign-name">${deptHead}</div>
+                            <div class="sign-date">Date: ${signDate}</div>
+                        </div>
+                    </td>
+                </tr>
+              </table>
             </div>
             
             <div class="notes-box">
-              <div style="font-weight:bold; border-bottom:0.5pt solid black; margin-bottom:3px; padding-bottom:1px;">NOTES:</div>
+              <div style="font-weight:bold; border-bottom:0.1pt solid black; margin-bottom:3px; padding-bottom:1px;">NOTES:</div>
             </div>
           </div>
-
         </div>
       </div>
     </body>
