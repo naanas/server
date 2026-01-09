@@ -1,24 +1,8 @@
 import axios from 'axios';
 import csv from 'csv-parser';
-import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
-import path from 'path';
+import { supabase } from '../dbconfig/supabase'; // Gunakan client terpusat (sudah load env)
 
-// Load Env
-const envPath = path.resolve(__dirname, '../.env');
-dotenv.config({ path: envPath });
-
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const SHEET_URL = process.env.SHEET_CSV_URL;
-const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
-
-const supabase = createClient(supabaseUrl || '', supabaseKey || '', {
-    auth: { persistSession: false }
-});
-
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
+// Helper: Normalisasi Key Object (Lowercase & Trim)
 const normalizeRowKeys = (row: any) => {
     const newRow: any = {};
     Object.keys(row).forEach(key => {
@@ -27,6 +11,7 @@ const normalizeRowKeys = (row: any) => {
     return newRow;
 };
 
+// Helper: Ambil value dari berbagai kemungkinan nama kolom
 const getValue = (row: any, possibleKeys: string[]) => {
     for (const key of possibleKeys) {
         if (row[key] !== undefined && row[key] !== '') return row[key].trim();
@@ -34,19 +19,24 @@ const getValue = (row: any, possibleKeys: string[]) => {
     return '';
 };
 
+// Helper: Sleep
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export const syncCsvToSupabase = async () => {
-    // --- DEBUGGING LOGS ---
-    console.log("-------------------------------------------------");
-    console.log("🔍 DEBUG SYNC CONFIG:");
-    console.log("🔗 SHEET_URL:", SHEET_URL ? "✅ OK" : "❌ MISSING");
-    console.log("🔗 JIRA_BASE_URL:", JIRA_BASE_URL ? `✅ OK (${JIRA_BASE_URL})` : "❌ MISSING / UNDEFINED");
-    console.log("-------------------------------------------------");
+    // 1. BACA ENV DI DALAM FUNGSI (Agar aman terbaca)
+    const SHEET_URL = process.env.GOOGLE_SHEET_CSV_URL;
+    const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
 
-    if (!SHEET_URL) throw new Error("GOOGLE_SHEET_CSV_URL missing");
+    // Cek Env
+    if (!SHEET_URL) {
+        console.error("❌ ERROR: SHEET_CSV_URL belum ada di file .env");
+        throw new Error("SHEET_CSV_URL missing in .env file");
+    }
 
-    console.log("🔄 Starting Sync Process...");
+    console.log("🔄 Starting Sync Process (Optimized Upsert Mode)...");
+    console.log("🔗 Connecting to Sheet...");
 
-    // 1. Fetch CSV
+    // 2. Fetch CSV Stream
     const csvRows: any[] = [];
     try {
         const response = await axios.get(SHEET_URL, { responseType: 'stream' });
@@ -56,100 +46,85 @@ export const syncCsvToSupabase = async () => {
                 .on('end', resolve)
                 .on('error', reject);
         });
-    } catch (err) {
-        console.error("❌ Gagal download CSV:", err);
-        throw err;
+    } catch (err: any) {
+        console.error("❌ Gagal download CSV. Pastikan Link Public/CSV benar.", err.message);
+        throw new Error("Failed to download CSV from Google Sheet");
     }
 
-    console.log(`📥 Downloaded ${csvRows.length} rows. Checking DB...`);
+    console.log(`📥 Downloaded ${csvRows.length} rows from Sheet.`);
 
-    // 2. Cek Data Existing
-    const existingSignatures = new Set();
-    const pageSize = 10000;
-    let page = 0;
-    let fetchMore = true;
-
-    while (fetchMore) {
-        const { data, error } = await supabase
-            .from('tasks')
-            .select('raw_signature')
-            .range(page * pageSize, (page + 1) * pageSize - 1);
-        
-        if (error) throw error;
-
-        if (data && data.length > 0) {
-            data.forEach((d: any) => existingSignatures.add(d.raw_signature));
-            page++;
-        } else {
-            fetchMore = false;
-        }
-    }
-
-    // 3. Filter & Construct Data
-    const newRecords: any[] = [];
-    
-    // Debug flag agar log tidak spam (cuma muncul sekali)
-    let debugRowPrinted = false;
+    // 3. Construct Data (Mapping CSV ke DB Schema)
+    const recordsToUpsert: any[] = [];
+    const processedSignatures = new Set(); 
 
     for (const row of csvRows) {
         const date = getValue(row, ['start date (batb)', 'start date', 'date', 'tanggal']);
         const desc = getValue(row, ['description', 'summary', 'deskripsi', 'task']);
         const reporter = getValue(row, ['reporters', 'reporter', 'assignee', 'owner']);
-        // Tambahkan variasi header tiket
         const ticketNum = getValue(row, ['ticket number', 'issue key', 'key', 'issue id', 'no tiket']); 
-        
-        // CSV Link fallback
         const csvLink = getValue(row, ['ticket link', 'link', 'url']);
 
+        // Skip jika data wajib kosong
         if (!date || !desc || !reporter) continue;
 
-        // --- LOGIC JIRA LINK ---
+        // Logic Link Jira
         let finalLink = csvLink; 
-        
         if (ticketNum && JIRA_BASE_URL) {
             const baseUrl = JIRA_BASE_URL.endsWith('/') ? JIRA_BASE_URL : `${JIRA_BASE_URL}/`;
             finalLink = `${baseUrl}${ticketNum}`;
         }
-        
-        // DEBUG: Cek 1 baris pertama yang punya tiket
-        if (!debugRowPrinted && ticketNum) {
-            console.log("🔍 [DEBUG ROW] Sample Ticket Logic:");
-            console.log(`   - Ticket Num Found: ${ticketNum}`);
-            console.log(`   - Generated Link: ${finalLink}`);
-            debugRowPrinted = true;
-        }
-        // -----------------------
 
+        // Signature Unik (Composite Key manual)
         const signature = `${date}|${desc}|${reporter}|${ticketNum}`.toLowerCase();
 
-        if (!existingSignatures.has(signature)) {
-            newRecords.push({
-                date: date,
+        // Cegah duplikat dalam batch CSV itu sendiri
+        if (!processedSignatures.has(signature)) {
+            recordsToUpsert.push({
+                date: date, // Format YYYY-MM-DD
                 description: desc,
                 reporter: reporter,
                 assignee: reporter,
                 ticket_number: ticketNum,
                 ticket_link: finalLink,
-                raw_signature: signature
+                raw_signature: signature,
+                updated_at: new Date()
             });
-            existingSignatures.add(signature);
+            processedSignatures.add(signature);
         }
     }
 
-    // 4. Insert Batch
-    if (newRecords.length > 0) {
-        console.log(`✨ Found ${newRecords.length} NEW records.`);
-        const batchSize = 1000;
+    // 4. Batch Upsert ke Supabase
+    if (recordsToUpsert.length > 0) {
+        console.log(`✨ Preparing to sync ${recordsToUpsert.length} records...`);
         
-        for (let i = 0; i < newRecords.length; i += batchSize) {
-            const batch = newRecords.slice(i, i + batchSize);
-            console.log(`   🚀 Inserting batch ${i}...`);
-            await supabase.from('tasks').insert(batch);
-            await sleep(1000);
+        const batchSize = 1000; 
+        let insertedCount = 0;
+        
+        for (let i = 0; i < recordsToUpsert.length; i += batchSize) {
+            const batch = recordsToUpsert.slice(i, i + batchSize);
+            console.log(` 🚀 Upserting batch ${i} - ${i + batch.length}...`);
+            
+            // Upsert (Insert or Ignore/Update based on unique key)
+            const { error } = await supabase
+                .from('tasks')
+                .upsert(batch, { 
+                    onConflict: 'raw_signature', 
+                    ignoreDuplicates: true 
+                });
+
+            if (error) {
+                console.error(`❌ Batch error at index ${i}:`, error.message);
+            } else {
+                insertedCount += batch.length;
+            }
+            
+            await sleep(200); // Jeda nafas database
         }
-        return { status: 'updated', count: newRecords.length };
+        
+        console.log(`✅ Sync Finished. Processed ${insertedCount} rows.`);
+        return { status: 'updated', count: insertedCount };
     } else {
-        console.log("✅ Database up to date.");
-        return { status: 'up-to-date', count: 0 };
+        console.log("⚠️ No valid rows found in CSV.");
+        return { status: 'empty', count: 0 };
     }
 };
