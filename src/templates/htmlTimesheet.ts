@@ -1,10 +1,30 @@
 import dayjs from 'dayjs';
 import { Task, OvertimeTask, getBase64Image, parseDateKey } from './htmlHelpers';
 
-export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTasks: OvertimeTask[]) => {
+// UPDATE: Parameter ke-4 'customHolidays' WAJIB ADA agar sinkron dengan htmlGenerator.ts
+export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTasks: OvertimeTask[], customHolidays: string[] = []) => {
   const logoPoj = getBase64Image('logo-poj.png');
   const logoPegadaian = getBase64Image('logo-pegadaian.png'); 
   
+  // --- LOGIC GABUNGAN (API + FALLBACK) ---
+  // Kita tampung di variable HOLIDAYS
+  let HOLIDAYS = customHolidays;
+
+  // Jika API gagal/kosong, gunakan Hardcode Fallback
+  if (!HOLIDAYS || HOLIDAYS.length === 0) {
+      HOLIDAYS = [
+          '2024-12-25', '2024-12-26', 
+          '2025-01-01', '2025-01-27', '2025-01-29', 
+          '2025-03-29', '2025-03-31', '2025-04-01', 
+          '2025-04-18', '2025-04-20', 
+          '2025-05-01', '2025-05-12', '2025-05-29', 
+          '2025-06-01', '2025-06-06', '2025-06-27', 
+          '2025-08-17', '2025-09-05', 
+          '2025-12-25', '2025-12-26', 
+          '2026-01-01'
+      ];
+  }
+
   // --- DATA PROCESSING ---
   const displayName = (employee.reportName && employee.reportName.trim() !== '') ? employee.reportName : employee.name;
   const signDate = employee.periodEnd ? dayjs(employee.periodEnd).format('DD/MM/YYYY') : '-';
@@ -36,38 +56,60 @@ export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTask
       curr = curr.add(1, 'day');
   }
 
-  // --- MAPPING (LOGIC BARU) ---
+  // --- MAPPING LOGIC (CRUCIAL) ---
   const dataMap: Record<string, { status: string, ot: number, isHoliday: boolean }> = {};
   
   headers.forEach(h => { 
-      // LOGIC DEFAULT:
-      // Jika Weekend -> 'W'
-      // Jika Weekday -> '' (KOSONG, bukan 8)
+      // 1. Cek apakah tanggal ini ada di list HOLIDAYS?
+      const isNasionalHoliday = HOLIDAYS.includes(h.date);
+      
+      let initialStatus = '';
+      let isHol = false;
+
+      if (isNasionalHoliday) {
+          initialStatus = 'H'; // Default status jadi H
+          isHol = true;        // Flag background merah
+      } else if (h.isWeekend) {
+          initialStatus = 'W';
+      }
+
       dataMap[h.date] = { 
-          status: h.isWeekend ? 'W' : '', 
+          status: initialStatus, 
           ot: 0, 
-          isHoliday: false 
+          isHoliday: isHol 
       }; 
   });
 
+  // --- TASK PROCESSING (Override Logic) ---
   tasks.forEach(t => {
       const key = parseDateKey(t.date).key;
       if (dataMap[key]) {
           const desc = (t.description || '').toUpperCase(); 
+          const userStatus = (t.status || '').toUpperCase();
           
-          // 1. Cek Special Status dulu
-          if (desc.startsWith('[AL]') || desc.includes('CUTI') || desc.includes('ANNUAL LEAVE')) dataMap[key].status = 'AL';
-          else if (desc.startsWith('[S]') || desc.includes('SAKIT') || desc.includes('SICK')) dataMap[key].status = 'S';
-          else if (desc.startsWith('[H]') || desc.includes('LIBUR') || desc.includes('HOLIDAY')) { 
-              dataMap[key].status = 'H'; 
-              dataMap[key].isHoliday = true; 
+          let detectedCode = '';
+
+          // 1. Priority Detection (Keywords)
+          if (desc.startsWith('[AL]') || desc.includes('CUTI') || desc.includes('ANNUAL LEAVE')) detectedCode = 'AL';
+          else if (desc.startsWith('[S]') || desc.includes('SAKIT') || desc.includes('SICK')) detectedCode = 'S';
+          else if (desc.startsWith('[H]') || desc.includes('LIBUR') || desc.includes('HOLIDAY')) detectedCode = 'H';
+          else if (desc.startsWith('[U]') || desc.includes('UNPAID')) detectedCode = 'U';
+          else if (desc.startsWith('[C]') || desc.includes('COMP')) detectedCode = 'C';
+          
+          // 2. Dropdown Status
+          else if (['AL', 'S', 'H', 'U', 'C'].includes(userStatus)) {
+              detectedCode = userStatus;
           }
-          else if (desc.startsWith('[U]') || desc.includes('UNPAID')) dataMap[key].status = 'U';
-          else if (desc.startsWith('[C]') || desc.includes('COMP')) dataMap[key].status = 'C';
-          
-          // 2. Jika tidak ada keyword khusus DAN bukan Weekend, set jadi '8'
-          // Artinya: Ada task masuk, tapi bukan cuti/sakit -> berarti KERJA
-          else if (dataMap[key].status !== 'W') {
+
+          if (detectedCode) {
+              // Jika Cuti/Sakit -> Paksa ubah status
+              dataMap[key].status = detectedCode;
+              dataMap[key].isHoliday = (detectedCode === 'H');
+          } 
+          else if (userStatus === 'WH' || desc.length > 1) {
+              // PENTING: Jika user input kerja ('WH' atau ada deskripsi)
+              // Maka status 'H' (Libur Nasional) akan tertimpa menjadi '8' (Masuk Kerja)
+              // Ini logic yang benar untuk lembur di hari libur/masuk hari libur.
               dataMap[key].status = '8';
           }
       }
@@ -95,24 +137,25 @@ export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTask
       headers.forEach(h => {
           const item = dataMap[h.date];
           let val = '';
-          let bg = h.isWeekend ? 'background:#F3F3F3;' : '';
           
+          // Background Color Logic
+          let bg = '';
+          if (item.isHoliday) bg = 'background:#FFECEC;'; // Prioritas Merah Muda (Libur)
+          else if (h.isWeekend) bg = 'background:#F3F3F3;'; // Abu (Weekend Biasa)
+
           if (type === 'ot') {
               val = item.ot > 0 ? String(item.ot) : '';
           } else if (type === 'check') {
-              if (code === 'H' && item.isHoliday) { val = 'H'; bg = 'background:#FFECEC;'; }
+              if (code === 'H' && item.status === 'H') val = 'H';
               else if (code === 'AL' && item.status === 'AL') val = 'AL';
               else if (code === 'S' && item.status === 'S') val = 'S';
               else if (code === 'W' && item.status === 'W') val = 'W';
               else if (code === 'U' && item.status === 'U') val = 'U';
               else if (code === 'C' && item.status === 'C') val = 'C';
           } else {
-              // Main WH Row
-              if (item.isHoliday) val = 'H'; 
-              else if (['AL','S','U','C'].includes(item.status)) val = item.status;
-              else if (item.status === 'W') val = 'W'; 
-              else if (item.status === '8') val = '8'; // Hanya muncul jika status '8'
-              else val = ''; // Kosong jika tidak ada data
+              if (item.status === '8') val = '8'; 
+              else if (['AL','S','U','C','H','W'].includes(item.status)) val = item.status;
+              else val = ''; 
           }
           cells += `<td class="ctr" style="${bg}">${val}</td>`;
       });
@@ -148,6 +191,7 @@ export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTask
 
         .header-wrap { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: none; padding-bottom: 5px; margin-bottom: 12px; }
         
+        /* INFO TABLE STYLE */
         .info-tbl td { border: none !important; padding: 2px 0 !important; }
         .info-tbl td.val-cell { 
             border-bottom: 0.5pt solid #000000 !important; 
@@ -249,7 +293,6 @@ export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTask
                 <tr class="bg-gray" style="font-weight:bold;"><td colspan="2" style="text-align:center;">Total</td><td class="ctr">${stats.wh + stats.ot}</td><td class="ctr">${stats.totalDays + stats.al + stats.s + stats.h + stats.u + stats.c}</td></tr>
               </tbody>
             </table>
-
             <div class="sign-area">
               <div class="certify-text">"I CERTIFY THAT THE ABOVE IS A TRUE RECORD OF MY TIME FOR THIS PERIOD FROM <b>${monthLabel}</b>"</div>
               <table class="sign-table">

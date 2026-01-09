@@ -3,23 +3,22 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 
-// --- 1. IMPORT DB CONFIG (Supabase Client Terpusat) ---
-// Ini memperbaiki error "supabaseUrl required" karena env di-load di dalam file ini
+// --- 1. IMPORT DB CONFIG ---
 import { supabase } from './dbconfig/supabase'; 
 
-// --- 2. IMPORT GENERATORS (Root src) ---
+// --- 2. IMPORT GENERATORS ---
 import { generatePreview } from './htmlGenerator'; 
 import { generateTimesheet } from './excelGenerator';
 
-// --- 3. IMPORT SERVICES (Folder src/services) ---
+// --- 3. IMPORT SERVICES ---
 import { generateProfessionalDescription } from './services/aiService';
 import { syncCsvToSupabase } from './services/syncService';
 import { getReportersFromDB, getTasksFromDB } from './services/dbService';
+import { getIndonesianHolidays } from './services/holidayService'; // Service API Libur
 
 // --- CONFIGURATION ---
 const app = express();
 
-// Load Env (Backup load jika belum terload di dbconfig)
 if (process.env.NODE_ENV !== 'production') {
     dotenv.config({ path: path.resolve(__dirname, '../.env') });
 }
@@ -34,12 +33,11 @@ app.use(cors({
 app.use(express.json());
 
 // ====================================================
-// 🔐 1. ROUTES AUTHENTICATION
+// 🔐 ROUTES AUTH
 // ====================================================
 
 app.post('/api/auth/register', async (req: Request, res: Response): Promise<any> => {
     const { email, password } = req.body;
-    // Menggunakan client 'supabase' yang diimport dari dbconfig
     const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) return res.status(400).json({ error: error.message });
     res.json({ message: 'Success', user: data.user, session: data.session });
@@ -67,7 +65,7 @@ app.post('/api/auth/logout', async (req: Request, res: Response): Promise<any> =
 
 
 // ====================================================
-// 🔄 2. ROUTES SYNC & DATA
+// 🔄 ROUTES SYNC & DATA
 // ====================================================
 
 app.post('/api/sync', async (req: Request, res: Response): Promise<any> => {
@@ -92,29 +90,24 @@ app.get('/api/assignees', async (req: Request, res: Response): Promise<any> => {
 
 
 // ====================================================
-// 📄 3. ROUTES PREVIEW (DUAL TEMPLATE: Mandays & Timesheet)
+// 📄 ROUTES PREVIEW HTML (Logic Libur Disini)
 // ====================================================
 
 app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> => {
   try {
-    // Ambil parameter 'type' dari body (mandays / timesheet)
     const { type, employee, tasks: manualTasks, overtimeTasks } = req.body;
     
-    // Gabungkan task manual (jika ada)
     let combinedRegularTasks = [...(manualTasks || [])];
 
-    // Jika user memilih nama, ambil task dari DB Supabase
+    // Ambil Task dari DB jika ada nama
     if (employee.name) {
         try {
-            console.log(`🔍 [${type || 'mandays'}] Query DB untuk Reporter: "${employee.name}"`);
-            
             const dbTasks = await getTasksFromDB(
                 employee.name,
                 employee.periodStart,
                 employee.periodEnd
             );
             
-            // Mapping dari kolom DB (snake_case) ke aplikasi (camelCase)
             const mappedTasks = dbTasks.map((t: any) => ({
                 date: t.date,
                 description: t.description,
@@ -122,16 +115,33 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
                 ticketLink: t.ticket_link
             }));
 
-            console.log(`✅ Ditemukan ${mappedTasks.length} task dari DB.`);
             combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
-            
         } catch (err) {
             console.warn("[DB Preview] Failed:", err);
         }
     }
 
-    // Panggil Switcher Generator di htmlGenerator.ts
-    const htmlString = generatePreview(type || 'mandays', employee, combinedRegularTasks, overtimeTasks || []);
+    // --- FETCH DATA LIBUR (API) ---
+    let holidays: string[] = [];
+    if (type === 'timesheet') {
+        const targetYear = employee.periodEnd 
+            ? new Date(employee.periodEnd).getFullYear() 
+            : new Date().getFullYear();
+            
+        // Panggil Service API
+        holidays = await getIndonesianHolidays(targetYear);
+        console.log(`📅 Preview Timesheet: Mengirim ${holidays.length} hari libur ke template.`);
+    }
+
+    // --- GENERATE HTML ---
+    // Kirim holidays sebagai parameter ke-5
+    const htmlString = generatePreview(
+        type || 'mandays', 
+        employee, 
+        combinedRegularTasks, 
+        overtimeTasks || [],
+        holidays 
+    );
     
     res.send(htmlString);
 
@@ -143,7 +153,7 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
 
 
 // ====================================================
-// 📎 4. ROUTES UTILS (Excel & AI)
+// 📎 ROUTES UTILS
 // ====================================================
 
 app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise<any> => {
@@ -161,7 +171,6 @@ app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise
 app.post('/api/enhance-description', async (req: Request, res: Response): Promise<any> => {
     try {
       const { text } = req.body;
-      // Memanggil AI service dari folder services
       const enhancedText = await generateProfessionalDescription(text);
       res.json({ text: enhancedText });
     } catch (error) {
@@ -171,7 +180,7 @@ app.post('/api/enhance-description', async (req: Request, res: Response): Promis
 });
 
 app.get('/', (req, res) => {
-    res.send('🚀 Backend Timesheet (Structure Updated) is Running!');
+    res.send('🚀 Backend Timesheet (With Holiday API) is Running!');
 });
 
 // --- SERVER LISTENER ---
