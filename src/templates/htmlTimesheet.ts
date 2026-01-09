@@ -36,19 +36,40 @@ export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTask
       curr = curr.add(1, 'day');
   }
 
-  // --- MAPPING ---
+  // --- MAPPING (LOGIC BARU) ---
   const dataMap: Record<string, { status: string, ot: number, isHoliday: boolean }> = {};
-  headers.forEach(h => { dataMap[h.date] = { status: h.isWeekend ? 'W' : '8', ot: 0, isHoliday: false }; });
+  
+  headers.forEach(h => { 
+      // LOGIC DEFAULT:
+      // Jika Weekend -> 'W'
+      // Jika Weekday -> '' (KOSONG, bukan 8)
+      dataMap[h.date] = { 
+          status: h.isWeekend ? 'W' : '', 
+          ot: 0, 
+          isHoliday: false 
+      }; 
+  });
 
   tasks.forEach(t => {
       const key = parseDateKey(t.date).key;
       if (dataMap[key]) {
           const desc = (t.description || '').toUpperCase(); 
+          
+          // 1. Cek Special Status dulu
           if (desc.startsWith('[AL]') || desc.includes('CUTI') || desc.includes('ANNUAL LEAVE')) dataMap[key].status = 'AL';
           else if (desc.startsWith('[S]') || desc.includes('SAKIT') || desc.includes('SICK')) dataMap[key].status = 'S';
-          else if (desc.startsWith('[H]') || desc.includes('LIBUR') || desc.includes('HOLIDAY')) { dataMap[key].status = 'H'; dataMap[key].isHoliday = true; }
+          else if (desc.startsWith('[H]') || desc.includes('LIBUR') || desc.includes('HOLIDAY')) { 
+              dataMap[key].status = 'H'; 
+              dataMap[key].isHoliday = true; 
+          }
           else if (desc.startsWith('[U]') || desc.includes('UNPAID')) dataMap[key].status = 'U';
           else if (desc.startsWith('[C]') || desc.includes('COMP')) dataMap[key].status = 'C';
+          
+          // 2. Jika tidak ada keyword khusus DAN bukan Weekend, set jadi '8'
+          // Artinya: Ada task masuk, tapi bukan cuti/sakit -> berarti KERJA
+          else if (dataMap[key].status !== 'W') {
+              dataMap[key].status = '8';
+          }
       }
   });
 
@@ -75,8 +96,10 @@ export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTask
           const item = dataMap[h.date];
           let val = '';
           let bg = h.isWeekend ? 'background:#F3F3F3;' : '';
-          if (type === 'ot') val = item.ot > 0 ? String(item.ot) : '';
-          else if (type === 'check') {
+          
+          if (type === 'ot') {
+              val = item.ot > 0 ? String(item.ot) : '';
+          } else if (type === 'check') {
               if (code === 'H' && item.isHoliday) { val = 'H'; bg = 'background:#FFECEC;'; }
               else if (code === 'AL' && item.status === 'AL') val = 'AL';
               else if (code === 'S' && item.status === 'S') val = 'S';
@@ -84,8 +107,12 @@ export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTask
               else if (code === 'U' && item.status === 'U') val = 'U';
               else if (code === 'C' && item.status === 'C') val = 'C';
           } else {
-              if (item.isHoliday) val = 'H'; else if (['AL','S','U','C'].includes(item.status)) val = item.status;
-              else if (item.status === 'W') val = 'W'; else val = '8';
+              // Main WH Row
+              if (item.isHoliday) val = 'H'; 
+              else if (['AL','S','U','C'].includes(item.status)) val = item.status;
+              else if (item.status === 'W') val = 'W'; 
+              else if (item.status === '8') val = '8'; // Hanya muncul jika status '8'
+              else val = ''; // Kosong jika tidak ada data
           }
           cells += `<td class="ctr" style="${bg}">${val}</td>`;
       });
@@ -121,10 +148,7 @@ export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTask
 
         .header-wrap { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: none; padding-bottom: 5px; margin-bottom: 12px; }
         
-        /* STYLE INFO TABLE (KEMBALI KE GAYA MANDAYS) */
         .info-tbl td { border: none !important; padding: 2px 0 !important; }
-        
-        /* BORDER LANGSUNG DI CELL (SAMA KY MANDAYS) TAPI HITAM PEKAT */
         .info-tbl td.val-cell { 
             border-bottom: 0.5pt solid #000000 !important; 
             font-weight: bold; 
