@@ -8,13 +8,14 @@ import { supabase } from './dbconfig/supabase';
 
 // --- 2. IMPORT GENERATORS ---
 import { generatePreview } from './htmlGenerator'; 
-import { generateTimesheet } from './excelGenerator';
+// UPDATE: Import fungsi yang benar (generateTimesheetExcel)
+import { generateTimesheetExcel } from './excelGenerator';
 
 // --- 3. IMPORT SERVICES ---
 import { generateProfessionalDescription } from './services/aiService';
 import { syncCsvToSupabase } from './services/syncService';
 import { getReportersFromDB, getTasksFromDB } from './services/dbService';
-import { getIndonesianHolidays } from './services/holidayService'; // Service API Libur
+import { getIndonesianHolidays } from './services/holidayService';
 
 // --- CONFIGURATION ---
 const app = express();
@@ -90,7 +91,7 @@ app.get('/api/assignees', async (req: Request, res: Response): Promise<any> => {
 
 
 // ====================================================
-// 📄 ROUTES PREVIEW HTML (Logic Libur Disini)
+// 📄 ROUTES PREVIEW HTML
 // ====================================================
 
 app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> => {
@@ -130,11 +131,9 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
             
         // Panggil Service API
         holidays = await getIndonesianHolidays(targetYear);
-        console.log(`📅 Preview Timesheet: Mengirim ${holidays.length} hari libur ke template.`);
     }
 
     // --- GENERATE HTML ---
-    // Kirim holidays sebagai parameter ke-5
     const htmlString = generatePreview(
         type || 'mandays', 
         employee, 
@@ -153,14 +152,25 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
 
 
 // ====================================================
-// 📎 ROUTES UTILS
+// 📎 ROUTES UTILS (Excel & AI)
 // ====================================================
 
+// UPDATE: Generate Excel Route dengan fungsi yang benar
 app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise<any> => {
     try {
-        const { employee, tasks } = req.body;
-        const buffer = await generateTimesheet(employee, tasks);
+        const { employee, tasks, overtimeTasks } = req.body;
+
+        // 1. Fetch Libur Dulu (Agar Excel juga merah tanggal merahnya)
+        const year = employee.periodEnd 
+            ? new Date(employee.periodEnd).getFullYear() 
+            : new Date().getFullYear();
+        const holidays = await getIndonesianHolidays(year);
+
+        // 2. Generate Excel (Panggil generateTimesheetExcel)
+        const buffer = await generateTimesheetExcel(employee, tasks, overtimeTasks, holidays);
+        
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=Timesheet_${employee.name}.xlsx`);
         res.send(buffer);
     } catch (error) {
         console.error('Error Excel:', error);
@@ -180,7 +190,7 @@ app.post('/api/enhance-description', async (req: Request, res: Response): Promis
 });
 
 app.get('/', (req, res) => {
-    res.send('🚀 Backend Timesheet (With Holiday API) is Running!');
+    res.send('🚀 Backend Timesheet (With Excel Export) is Running!');
 });
 
 // --- SERVER LISTENER ---
