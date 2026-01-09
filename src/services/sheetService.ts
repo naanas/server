@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { parse } from 'csv-parse/sync';
-import { Task } from './types';
+import { Task } from '../types/types';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 

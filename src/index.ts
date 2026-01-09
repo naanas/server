@@ -1,47 +1,27 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import path from 'path';
 
-// --- IMPORT SERVICES ---
-// Service Lama (Helper Generator)
-import { generateHtmlPreview } from './htmlGenerator';
-import { generateTimesheet } from './excelGenerator';
-import { generateProfessionalDescription } from './aiService';
+// --- 1. IMPORT DB CONFIG (Supabase Client Terpusat) ---
+// Ini memperbaiki error "supabaseUrl required" karena env di-load di dalam file ini
+import { supabase } from './dbconfig/supabase'; 
 
-// Service Baru (Database & Sync)
-import { syncCsvToSupabase } from './syncService';
-import { getReportersFromDB, getTasksFromDB } from './dbService';
+// --- 2. IMPORT GENERATORS (Root src) ---
+import { generatePreview } from './htmlGenerator'; 
+import { generateTimesheet } from './excelGenerator';
+
+// --- 3. IMPORT SERVICES (Folder src/services) ---
+import { generateProfessionalDescription } from './services/aiService';
+import { syncCsvToSupabase } from './services/syncService';
+import { getReportersFromDB, getTasksFromDB } from './services/dbService';
 
 // --- CONFIGURATION ---
 const app = express();
 
-// Load Env
+// Load Env (Backup load jika belum terload di dbconfig)
 if (process.env.NODE_ENV !== 'production') {
-    // Pastikan path .env benar
-    const envPath = path.resolve(__dirname, '../.env');
-    dotenv.config({ path: envPath });
-}
-
-// --- SETUP SUPABASE FOR AUTH ---
-// Note: Instance ini khusus untuk handling Auth user (Login/Regis)
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-let supabaseAuth: any;
-
-if (!supabaseUrl || !supabaseKey) {
-  console.warn("⚠️ SUPABASE CONFIG MISSING: Auth features will be disabled.");
-  supabaseAuth = {
-    auth: {
-        signUp: async () => ({ error: { message: "No Supabase Config" } }),
-        signInWithPassword: async () => ({ error: { message: "No Supabase Config" } }),
-        getUser: async () => ({ error: { message: "No Supabase Config" } }),
-        signOut: async () => ({})
-    }
-  };
-} else {
-  supabaseAuth = createClient(supabaseUrl, supabaseKey);
+    dotenv.config({ path: path.resolve(__dirname, '../.env') });
 }
 
 // --- MIDDLEWARE ---
@@ -57,60 +37,42 @@ app.use(express.json());
 // 🔐 1. ROUTES AUTHENTICATION
 // ====================================================
 
-// Register
 app.post('/api/auth/register', async (req: Request, res: Response): Promise<any> => {
     const { email, password } = req.body;
-    try {
-        const { data, error } = await supabaseAuth.auth.signUp({ email, password });
-        if (error) throw error;
-        res.json({ message: 'Success', user: data.user, session: data.session });
-    } catch (err: any) {
-        res.status(400).json({ error: err.message });
-    }
+    // Menggunakan client 'supabase' yang diimport dari dbconfig
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ message: 'Success', user: data.user, session: data.session });
 });
 
-// Login
 app.post('/api/auth/login', async (req: Request, res: Response): Promise<any> => {
     const { email, password } = req.body;
-    try {
-        const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-        res.json({ session: data.session, user: data.user });
-    } catch (err: any) {
-        res.status(401).json({ error: 'Invalid credentials' });
-    }
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return res.status(401).json({ error: 'Invalid credentials' });
+    res.json({ session: data.session, user: data.user });
 });
 
-// Get Profile (Me)
 app.get('/api/auth/me', async (req: Request, res: Response): Promise<any> => {
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'No token' });
-    try {
-        const { data, error } = await supabaseAuth.auth.getUser(token);
-        if (error) throw error;
-        res.json({ user: data.user });
-    } catch (err: any) {
-        res.status(401).json({ error: 'Invalid token' });
-    }
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error) return res.status(401).json({ error: 'Invalid token' });
+    res.json({ user: data.user });
 });
 
-// Logout
 app.post('/api/auth/logout', async (req: Request, res: Response): Promise<any> => {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (token && supabaseUrl && supabaseKey) await supabaseAuth.auth.signOut();
+    await supabase.auth.signOut();
     res.json({ message: 'Logged out' });
 });
 
 
 // ====================================================
-// 🔄 2. ROUTES SYNC & DATA (BARU)
+// 🔄 2. ROUTES SYNC & DATA
 // ====================================================
 
-// A. SYNC DATA (Download CSV Google -> Save ke DB Supabase)
 app.post('/api/sync', async (req: Request, res: Response): Promise<any> => {
     try {
         const result = await syncCsvToSupabase();
-        // result = { status: 'updated' | 'up-to-date', count: number }
         res.json(result);
     } catch (error: any) {
         console.error("Sync Error:", error);
@@ -118,7 +80,6 @@ app.post('/api/sync', async (req: Request, res: Response): Promise<any> => {
     }
 });
 
-// B. GET REPORTERS (Ambil List Nama dari DB untuk Dropdown)
 app.get('/api/assignees', async (req: Request, res: Response): Promise<any> => {
     try {
         const list = await getReportersFromDB();
@@ -131,13 +92,13 @@ app.get('/api/assignees', async (req: Request, res: Response): Promise<any> => {
 
 
 // ====================================================
-// 📄 3. ROUTES TIMESHEET PREVIEW
+// 📄 3. ROUTES PREVIEW (DUAL TEMPLATE: Mandays & Timesheet)
 // ====================================================
 
-// Preview HTML (Baca dari DB + Manual Input)
 app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> => {
   try {
-    const { employee, tasks: manualTasks, overtimeTasks } = req.body;
+    // Ambil parameter 'type' dari body (mandays / timesheet)
+    const { type, employee, tasks: manualTasks, overtimeTasks } = req.body;
     
     // Gabungkan task manual (jika ada)
     let combinedRegularTasks = [...(manualTasks || [])];
@@ -145,7 +106,7 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
     // Jika user memilih nama, ambil task dari DB Supabase
     if (employee.name) {
         try {
-            console.log(`🔍 Query DB untuk Reporter: "${employee.name}"`);
+            console.log(`🔍 [${type || 'mandays'}] Query DB untuk Reporter: "${employee.name}"`);
             
             const dbTasks = await getTasksFromDB(
                 employee.name,
@@ -153,27 +114,25 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
                 employee.periodEnd
             );
             
-            // Mapping format DB (snake_case) ke format App (camelCase)
+            // Mapping dari kolom DB (snake_case) ke aplikasi (camelCase)
             const mappedTasks = dbTasks.map((t: any) => ({
-                date: t.date,               // Tetap string asli (misal: "3/3/2025")
+                date: t.date,
                 description: t.description,
                 ticketNumber: t.ticket_number,
                 ticketLink: t.ticket_link
             }));
 
             console.log(`✅ Ditemukan ${mappedTasks.length} task dari DB.`);
-            
-            // Gabungkan: Task DB + Task Manual
             combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
             
         } catch (err) {
             console.warn("[DB Preview] Failed:", err);
-            // Lanjut saja dengan task manual jika DB gagal
         }
     }
 
-    // Generate HTML String
-    const htmlString = generateHtmlPreview(employee, combinedRegularTasks, overtimeTasks || []);
+    // Panggil Switcher Generator di htmlGenerator.ts
+    const htmlString = generatePreview(type || 'mandays', employee, combinedRegularTasks, overtimeTasks || []);
+    
     res.send(htmlString);
 
   } catch (error) {
@@ -187,11 +146,9 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
 // 📎 4. ROUTES UTILS (Excel & AI)
 // ====================================================
 
-// Generate Excel (Saat ini masih pakai data manual yang dikirim dari frontend)
-// TODO: Bisa diupdate juga biar ngambil dari DB
 app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise<any> => {
     try {
-        const { employee, tasks, overtimeTasks } = req.body;
+        const { employee, tasks } = req.body;
         const buffer = await generateTimesheet(employee, tasks);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.send(buffer);
@@ -201,10 +158,10 @@ app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise
     }
 });
 
-// AI Enhance Description
 app.post('/api/enhance-description', async (req: Request, res: Response): Promise<any> => {
     try {
       const { text } = req.body;
+      // Memanggil AI service dari folder services
       const enhancedText = await generateProfessionalDescription(text);
       res.json({ text: enhancedText });
     } catch (error) {
@@ -213,9 +170,8 @@ app.post('/api/enhance-description', async (req: Request, res: Response): Promis
     }
 });
 
-// Check Server Status
 app.get('/', (req, res) => {
-    res.send('🚀 Backend Timesheet (Supabase DB Version) is Running!');
+    res.send('🚀 Backend Timesheet (Structure Updated) is Running!');
 });
 
 // --- SERVER LISTENER ---

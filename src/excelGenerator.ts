@@ -1,6 +1,6 @@
 import ExcelJS from 'exceljs';
 import dayjs from 'dayjs';
-import { Task, EmployeeData } from './types';
+import { Task, EmployeeData } from './types/types';
 
 export const generateTimesheet = async (employee: EmployeeData, tasks: Task[]) => {
   const workbook = new ExcelJS.Workbook();
