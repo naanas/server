@@ -16,7 +16,7 @@ import { syncCsvToSupabase } from './services/syncService';
 import { getReportersFromDB, getTasksFromDB } from './services/dbService';
 import { getIndonesianHolidays } from './services/holidayService';
 
-// --- 4. IMPORT PAYMENT SERVICES (INI YANG KEMAREN HILANG) ---
+// --- 4. IMPORT PAYMENT SERVICES ---
 import { createInvoice } from './services/paymentService';
 import { generatePdfBuffer } from './services/pdfService';
 import { sendEmailWithPdf } from './services/emailService';
@@ -103,18 +103,39 @@ app.post('/api/payment/create', async (req: Request, res: Response): Promise<any
         const { employee, tasks, overtimeTasks, type, email, user_id } = req.body;
         
         if (!email) return res.status(400).json({ error: "Email wajib diisi!" });
-        // if (!user_id) return res.status(400).json({ error: "User ID wajib ada!" }); // Opsional strict check
+        
+        // --- 1. LOGIKA PENENTUAN HARGA ---
+        
+        // A. Set Harga Default (Jaga-jaga jika DB error/kosong)
+        let amount = type === 'mandays' ? 25000 : 20000; 
+
+        // B. Cek Harga Real-time dari Database (Admin Config)
+        try {
+            const configKey = type === 'mandays' ? 'mandays_price' : 'timesheet_price';
+            
+            const { data: pricingData } = await supabase
+                .from('pricing_config')
+                .select('value')
+                .eq('key', configKey)
+                .single();
+
+            if (pricingData && pricingData.value) {
+                amount = Number(pricingData.value); // Override harga default
+            }
+        } catch (e) {
+            console.warn("Gagal mengambil dynamic price, menggunakan harga default.", e);
+        }
 
         const externalId = `TRX-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        const amount = 20000; 
+        const description = `Premium Export: ${type ? type.toUpperCase() : 'TIMESHEET'} Report`;
 
         // a. Create Xendit Invoice
-        const invoice = await createInvoice(externalId, amount, email);
+        const invoice = await createInvoice(externalId, amount, email, description);
 
         // b. Simpan ke DB dengan USER_ID
         const { error } = await supabase.from('transactions').insert({
             external_id: externalId,
-            amount: amount,
+            amount: amount,        // Simpan harga deal saat transaksi dibuat
             customer_email: email, // Email tujuan PDF
             user_id: user_id,      // ID Akun yang login (PENTING)
             type: type || 'timesheet',
@@ -343,6 +364,11 @@ app.post('/api/enhance-description', async (req: Request, res: Response): Promis
     }
 });
 
+// ====================================================
+// 📊 ROUTES HISTORY & PRICING
+// ====================================================
+
+// GET HISTORY (FILTER BY USER ID)
 app.get('/api/history', async (req: Request, res: Response): Promise<any> => {
     const userId = req.query.user_id as string;
     
@@ -366,6 +392,7 @@ app.get('/api/history', async (req: Request, res: Response): Promise<any> => {
     }
 });
 
+// CHECK STATUS MANUAL
 app.post('/api/payment/check-status', async (req: Request, res: Response): Promise<any> => {
     try {
         const { external_id } = req.body;
@@ -376,16 +403,68 @@ app.post('/api/payment/check-status', async (req: Request, res: Response): Promi
 
         // Jika sudah PAID, kembalikan saja
         if (trx.status === 'PAID') return res.json({ status: 'PAID' });
-
-        // Jika masih PENDING, Cek ke Xendit (Optional: Butuh Xendit Client di sini)
-        // Untuk simplifikasi, kita anggap endpoint ini hanya trigger re-fetch dari sisi client
-        // Tapi idealnya kita panggil API Xendit Get Invoice di sini.
-        // Karena kode Xendit Client ada di service lain, kita skip logic call Xendit API demi kesederhanaan,
-        // user cukup refresh tabel. Atau kalau mau canggih, panggil service getInvoice.
         
+        // Return status terkini (Di production bisa cek ke Xendit API di sini)
         res.json({ status: trx.status }); 
     } catch (e) {
         res.status(500).json({ error: "Gagal cek status" });
+    }
+});
+
+// GET PRICING (ALL USERS)
+app.get('/api/pricing', async (req: Request, res: Response): Promise<any> => {
+    try {
+        const { data, error } = await supabase
+            .from('pricing_config')
+            .select('*');
+        if (error) throw error;
+        
+        const pricingMap: any = {};
+        data.forEach((item: any) => {
+            pricingMap[item.key] = item.value;
+        });
+
+        res.json(pricingMap);
+    } catch (error) {
+        res.status(500).json({ error: "Gagal ambil harga" });
+    }
+});
+
+// UPDATE PRICE (ROLE BASED: ADMIN ONLY)
+app.post('/api/pricing/update', async (req: Request, res: Response): Promise<any> => {
+    const { user_id, updates } = req.body;
+
+    if (!user_id) return res.status(401).json({ error: "Unauthorized" });
+
+    try {
+        // 1. Cek Role di tabel profiles
+        const { data: profile, error } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', user_id)
+            .single();
+
+        if (error || !profile) {
+            return res.status(403).json({ error: "Gagal verifikasi user." });
+        }
+
+        // 2. KUNCI PENGAMAN: Hanya lolos jika role = 'admin'
+        if (profile.role !== 'admin') {
+            return res.status(403).json({ error: "AKSES DITOLAK: Anda bukan Admin!" });
+        }
+
+        // 3. Lakukan Update
+        for (const update of updates) {
+            await supabase
+                .from('pricing_config')
+                .update({ value: update.value, updated_at: new Date(), updated_by: user_id })
+                .eq('key', update.key);
+        }
+        res.json({ message: "Harga berhasil diupdate!" });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Server Error" });
     }
 });
 

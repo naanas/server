@@ -8,7 +8,7 @@ const xenditClient = new Xendit({
 
 const { Invoice } = xenditClient;
 
-export const createInvoice = async (externalId: string, amount: number, email: string) => {
+export const createInvoice = async (externalId: string, amount: number, email: string, description?: string) => {
     // Tentukan URL Frontend kamu (Ganti jika sudah deploy ke Vercel)
     // Contoh Local: http://localhost:5173
     // Contoh Prod: https://timesheet-app.vercel.app
@@ -17,8 +17,8 @@ export const createInvoice = async (externalId: string, amount: number, email: s
         data: {
             externalId: externalId,
             amount: amount,
+            description: description || 'Export Premium PDF Timesheet/Mandays',
             payerEmail: email,
-            description: "Export Premium PDF Timesheet/Mandays",
             invoiceDuration: 86400, 
             currency: "IDR",
             // INI YANG PENTING AGAR REDIRECT:
