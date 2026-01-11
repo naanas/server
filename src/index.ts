@@ -127,23 +127,32 @@ app.post('/api/payment/create', async (req: Request, res: Response): Promise<any
         // Switch Logic (Menentukan Fee & Metode Xendit)
         switch (paymentCategory) {
             case 'qris':
-                // Fee: Rp 1.000 (Cover QRIS 0.7% & E-Wallet 1.5%)
+                // Fee: Rp 1.000
                 adminFee = priceMap.fee_qris || 1000;
-                // Batasi hanya QRIS dan E-Wallet
-                allowedMethods = ['QRIS', 'EWALLET', 'DANA', 'OVO', 'SHOPEEPAY', 'LINKAJA', 'GOPAY'];
+                
+                // [FIX VERCEL ERROR] 
+                // Cukup 'QRIS'. Jangan masukkan 'GOPAY', 'OVO', 'SHOPEEPAY' dll.
+                // Jika salah satu dari itu belum aktif di dashboard, Vercel akan error 400.
+                // QRIS sudah universal bisa discan semua e-wallet.
+                allowedMethods = ['QRIS']; 
                 break;
+
             case 'retail':
-                // Fee: Rp 6.500 (Cover Indomaret 5.500 + PPN)
+                // Fee: Rp 6.500
                 adminFee = priceMap.fee_retail || 6500;
-                // Batasi hanya Retail
+                // Pastikan ALFAMART/INDOMARET aktif di Dashboard Xendit (Tab Configuration > Payment Methods)
                 allowedMethods = ['ALFAMART', 'INDOMARET'];
                 break;
+
             case 'va':
             default:
-                // Fee: Rp 4.500 (Cover VA 4.000 + PPN)
+                // Fee: Rp 4.500
                 adminFee = priceMap.fee_va || 4500;
-                // Batasi hanya Virtual Accounts
-                allowedMethods = ['BCA', 'BNI', 'BRI', 'MANDIRI', 'PERMATA', 'BSI', 'CIMB', 'BJB'];
+                
+                // [FIX VERCEL ERROR]
+                // Gunakan hanya Bank Besar yang pasti aktif.
+                // Hapus BJB, BSI, CIMB sementara agar tidak error jika belum diaktivasi.
+                allowedMethods = ['BCA', 'BNI', 'BRI', 'MANDIRI', 'PERMATA'];
                 break;
         }
 
@@ -436,7 +445,7 @@ app.post('/api/payment/check-status', async (req: Request, res: Response): Promi
     }
 });
 
-// GET PRICING (ALL USERS - Include Admin Fee Options)
+// GET PRICING (ALL USERS - Include Admin Fee)
 app.get('/api/pricing', async (req: Request, res: Response): Promise<any> => {
     try {
         const { data, error } = await supabase
