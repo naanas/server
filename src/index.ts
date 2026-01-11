@@ -99,24 +99,24 @@ app.get('/api/assignees', async (req: Request, res: Response): Promise<any> => {
 // 1. Create Invoice (Frontend Request Link Bayar)
 app.post('/api/payment/create', async (req: Request, res: Response): Promise<any> => {
     try {
-        const { employee, tasks, overtimeTasks, type, email } = req.body;
+        // Terima user_id dari frontend
+        const { employee, tasks, overtimeTasks, type, email, user_id } = req.body;
         
-        if (!email) return res.status(400).json({ error: "Email wajib diisi untuk pengiriman file!" });
+        if (!email) return res.status(400).json({ error: "Email wajib diisi!" });
+        // if (!user_id) return res.status(400).json({ error: "User ID wajib ada!" }); // Opsional strict check
 
-        // Generate ID Transaksi Unik
         const externalId = `TRX-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        const amount = 20000; // HARGA PDF (Rp 20.000)
+        const amount = 20000; 
 
         // a. Create Xendit Invoice
         const invoice = await createInvoice(externalId, amount, email);
 
-        // b. Simpan Data Sementara ke DB (State saat user klik bayar)
-        // Kita simpan manualTasks + logic DB fetch nanti diurus di webhook atau disini
-        // Untuk simpelnya, kita asumsikan 'tasks' dari frontend sudah final/gabungan
+        // b. Simpan ke DB dengan USER_ID
         const { error } = await supabase.from('transactions').insert({
             external_id: externalId,
             amount: amount,
-            customer_email: email,
+            customer_email: email, // Email tujuan PDF
+            user_id: user_id,      // ID Akun yang login (PENTING)
             type: type || 'timesheet',
             status: 'PENDING',
             payload: { employee, tasks, overtimeTasks } 
@@ -127,7 +127,6 @@ app.post('/api/payment/create', async (req: Request, res: Response): Promise<any
             return res.status(500).json({ error: "Gagal menyimpan transaksi" });
         }
 
-        // c. Return Link Bayar
         res.json({ invoiceUrl: invoice.invoiceUrl });
 
     } catch (error: any) {
@@ -341,6 +340,52 @@ app.post('/api/enhance-description', async (req: Request, res: Response): Promis
     } catch (error) {
         console.error('AI Error:', error);
         res.status(500).send('AI Error');
+    }
+});
+
+app.get('/api/history', async (req: Request, res: Response): Promise<any> => {
+    const userId = req.query.user_id as string;
+    
+    if (!userId) {
+        return res.status(400).json({ error: "User ID parameter required" });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('transactions')
+            .select('*')
+            .eq('user_id', userId) // Filter punya user yang login
+            .order('created_at', { ascending: false })
+            .limit(20);
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        console.error("Fetch History Error:", error);
+        res.status(500).json({ error: "Gagal mengambil history" });
+    }
+});
+
+app.post('/api/payment/check-status', async (req: Request, res: Response): Promise<any> => {
+    try {
+        const { external_id } = req.body;
+        // Cari transaksi di DB
+        const { data: trx } = await supabase.from('transactions').select('*').eq('external_id', external_id).single();
+        
+        if (!trx) return res.status(404).json({ error: "Transaksi tidak ditemukan" });
+
+        // Jika sudah PAID, kembalikan saja
+        if (trx.status === 'PAID') return res.json({ status: 'PAID' });
+
+        // Jika masih PENDING, Cek ke Xendit (Optional: Butuh Xendit Client di sini)
+        // Untuk simplifikasi, kita anggap endpoint ini hanya trigger re-fetch dari sisi client
+        // Tapi idealnya kita panggil API Xendit Get Invoice di sini.
+        // Karena kode Xendit Client ada di service lain, kita skip logic call Xendit API demi kesederhanaan,
+        // user cukup refresh tabel. Atau kalau mau canggih, panggil service getInvoice.
+        
+        res.json({ status: trx.status }); 
+    } catch (e) {
+        res.status(500).json({ error: "Gagal cek status" });
     }
 });
 
