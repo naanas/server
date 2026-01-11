@@ -8,8 +8,7 @@ import { supabase } from './dbconfig/supabase';
 
 // --- 2. IMPORT GENERATORS ---
 import { generatePreview } from './htmlGenerator'; 
-// UPDATE: Import fungsi yang benar (generateTimesheetExcel)
-import { generateTimesheetExcel } from './excelGenerator';
+import { generateTimesheetExcel, generateMandaysExcel } from './excelGenerator';
 
 // --- 3. IMPORT SERVICES ---
 import { generateProfessionalDescription } from './services/aiService';
@@ -64,7 +63,6 @@ app.post('/api/auth/logout', async (req: Request, res: Response): Promise<any> =
     res.json({ message: 'Logged out' });
 });
 
-
 // ====================================================
 // 🔄 ROUTES SYNC & DATA
 // ====================================================
@@ -98,9 +96,9 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
   try {
     const { type, employee, tasks: manualTasks, overtimeTasks } = req.body;
     
+    // Gabung Manual Input + DB Data
     let combinedRegularTasks = [...(manualTasks || [])];
 
-    // Ambil Task dari DB jika ada nama
     if (employee.name) {
         try {
             const dbTasks = await getTasksFromDB(
@@ -122,18 +120,16 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
         }
     }
 
-    // --- FETCH DATA LIBUR (API) ---
+    // Fetch Libur jika Timesheet
     let holidays: string[] = [];
     if (type === 'timesheet') {
         const targetYear = employee.periodEnd 
             ? new Date(employee.periodEnd).getFullYear() 
             : new Date().getFullYear();
             
-        // Panggil Service API
         holidays = await getIndonesianHolidays(targetYear);
     }
 
-    // --- GENERATE HTML ---
     const htmlString = generatePreview(
         type || 'mandays', 
         employee, 
@@ -155,26 +151,73 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
 // 📎 ROUTES UTILS (Excel & AI)
 // ====================================================
 
-// UPDATE: Generate Excel Route dengan fungsi yang benar
+// Route Excel Timesheet
 app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise<any> => {
     try {
-        const { employee, tasks, overtimeTasks } = req.body;
+        const { employee, tasks: manualTasks, overtimeTasks } = req.body;
 
-        // 1. Fetch Libur Dulu (Agar Excel juga merah tanggal merahnya)
-        const year = employee.periodEnd 
-            ? new Date(employee.periodEnd).getFullYear() 
-            : new Date().getFullYear();
+        // 1. FETCH DATA DB (Fix: Agar tidak kosong)
+        let combinedRegularTasks = [...(manualTasks || [])];
+        if (employee.name) {
+            try {
+                const dbTasks = await getTasksFromDB(employee.name, employee.periodStart, employee.periodEnd);
+                const mappedTasks = dbTasks.map((t: any) => ({
+                    date: t.date,
+                    description: t.description,
+                    ticketNumber: t.ticket_number,
+                    ticketLink: t.ticket_link
+                }));
+                combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
+            } catch (err) { console.warn("DB Fetch Error Excel:", err); }
+        }
+
+        // 2. Fetch Libur
+        const year = employee.periodEnd ? new Date(employee.periodEnd).getFullYear() : new Date().getFullYear();
         const holidays = await getIndonesianHolidays(year);
 
-        // 2. Generate Excel (Panggil generateTimesheetExcel)
-        const buffer = await generateTimesheetExcel(employee, tasks, overtimeTasks, holidays);
+        // 3. Generate Excel
+        const buffer = await generateTimesheetExcel(employee, combinedRegularTasks, overtimeTasks, holidays);
         
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename=Timesheet_${employee.name}.xlsx`);
+        res.setHeader('Content-Disposition', `attachment; filename=Timesheet_${employee.name || 'Export'}.xlsx`);
         res.send(buffer);
+
     } catch (error) {
-        console.error('Error Excel:', error);
+        console.error('Error Excel Timesheet:', error);
         res.status(500).send('Error Generate Excel');
+    }
+});
+
+// Route Excel Mandays
+app.post('/api/generate-mandays', async (req: Request, res: Response): Promise<any> => {
+    try {
+        const { employee, tasks: manualTasks, overtimeTasks } = req.body;
+
+        // 1. FETCH DATA DB (Fix: Agar tidak kosong)
+        let combinedRegularTasks = [...(manualTasks || [])];
+        if (employee.name) {
+            try {
+                const dbTasks = await getTasksFromDB(employee.name, employee.periodStart, employee.periodEnd);
+                const mappedTasks = dbTasks.map((t: any) => ({
+                    date: t.date,
+                    description: t.description,
+                    ticketNumber: t.ticket_number,
+                    ticketLink: t.ticket_link
+                }));
+                combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
+            } catch (err) { console.warn("DB Fetch Error Excel Mandays:", err); }
+        }
+
+        // 2. Generate Excel Mandays
+        const buffer = await generateMandaysExcel(employee, combinedRegularTasks, overtimeTasks);
+        
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=Mandays_${employee.name || 'Export'}.xlsx`);
+        res.send(buffer);
+
+    } catch (error) {
+        console.error('Error Excel Mandays:', error);
+        res.status(500).send('Error Generate Excel Mandays');
     }
 });
 
@@ -190,7 +233,7 @@ app.post('/api/enhance-description', async (req: Request, res: Response): Promis
 });
 
 app.get('/', (req, res) => {
-    res.send('🚀 Backend Timesheet (With Excel Export) is Running!');
+    res.send('🚀 Backend Timesheet (With Excel DB Fetch Fix) is Running!');
 });
 
 // --- SERVER LISTENER ---
