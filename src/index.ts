@@ -16,6 +16,11 @@ import { syncCsvToSupabase } from './services/syncService';
 import { getReportersFromDB, getTasksFromDB } from './services/dbService';
 import { getIndonesianHolidays } from './services/holidayService';
 
+// --- 4. IMPORT PAYMENT SERVICES (INI YANG KEMAREN HILANG) ---
+import { createInvoice } from './services/paymentService';
+import { generatePdfBuffer } from './services/pdfService';
+import { sendEmailWithPdf } from './services/emailService';
+
 // --- CONFIGURATION ---
 const app = express();
 
@@ -87,6 +92,113 @@ app.get('/api/assignees', async (req: Request, res: Response): Promise<any> => {
     }
 });
 
+// ====================================================
+// 💸 ROUTES PAYMENT & WEBHOOK (INTEGRASI XENDIT)
+// ====================================================
+
+// 1. Create Invoice (Frontend Request Link Bayar)
+app.post('/api/payment/create', async (req: Request, res: Response): Promise<any> => {
+    try {
+        const { employee, tasks, overtimeTasks, type, email } = req.body;
+        
+        if (!email) return res.status(400).json({ error: "Email wajib diisi untuk pengiriman file!" });
+
+        // Generate ID Transaksi Unik
+        const externalId = `TRX-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const amount = 20000; // HARGA PDF (Rp 20.000)
+
+        // a. Create Xendit Invoice
+        const invoice = await createInvoice(externalId, amount, email);
+
+        // b. Simpan Data Sementara ke DB (State saat user klik bayar)
+        // Kita simpan manualTasks + logic DB fetch nanti diurus di webhook atau disini
+        // Untuk simpelnya, kita asumsikan 'tasks' dari frontend sudah final/gabungan
+        const { error } = await supabase.from('transactions').insert({
+            external_id: externalId,
+            amount: amount,
+            customer_email: email,
+            type: type || 'timesheet',
+            status: 'PENDING',
+            payload: { employee, tasks, overtimeTasks } 
+        });
+
+        if (error) {
+            console.error("DB Transaction Error:", error);
+            return res.status(500).json({ error: "Gagal menyimpan transaksi" });
+        }
+
+        // c. Return Link Bayar
+        res.json({ invoiceUrl: invoice.invoiceUrl });
+
+    } catch (error: any) {
+        console.error("Create Payment Error:", error);
+        res.status(500).json({ error: "Terjadi kesalahan pembayaran" });
+    }
+});
+
+// 2. Webhook Xendit (Dipanggil Xendit saat LUNAS)
+app.post('/api/payment/webhook', async (req: Request, res: Response): Promise<any> => {
+    try {
+        const { external_id, status } = req.body;
+        console.log(`🔔 Webhook masuk: ${external_id} status ${status}`);
+
+        if (status === 'PAID') {
+            // a. Ambil Data Transaksi dari DB
+            const { data: trx, error } = await supabase
+                .from('transactions')
+                .select('*')
+                .eq('external_id', external_id)
+                .single();
+
+            if (error || !trx) return res.status(404).send('Transaction Not Found');
+
+            // Cek double process
+            if (trx.status === 'PAID') return res.status(200).json({ message: 'Already processed' });
+
+            // b. Update Status DB jadi PAID
+            await supabase.from('transactions')
+                .update({ status: 'PAID', updated_at: new Date() })
+                .eq('id', trx.id);
+
+            // c. Generate PDF (Server Side Logic)
+            const { employee, tasks: savedTasks, overtimeTasks } = trx.payload;
+            const type = trx.type;
+
+            // --- RE-FETCH DB LOGIC (Agar data PDF lengkap sama seperti Preview/Excel) ---
+            let combinedRegularTasks = [...(savedTasks || [])];
+            if (employee.name) {
+                try {
+                    const dbTasks = await getTasksFromDB(employee.name, employee.periodStart, employee.periodEnd);
+                    const mappedTasks = dbTasks.map((t: any) => ({
+                        date: t.date, description: t.description, ticketNumber: t.ticket_number, ticketLink: t.ticket_link
+                    }));
+                    combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
+                } catch (err) { console.warn("Webhook DB Fetch Error:", err); }
+            }
+
+            // Fetch Holidays
+            const year = new Date(employee.periodEnd).getFullYear();
+            const holidays = await getIndonesianHolidays(year);
+
+            // Generate HTML String
+            const htmlContent = generatePreview(type, employee, combinedRegularTasks, overtimeTasks, holidays);
+
+            // Convert to PDF Buffer (Puppeteer)
+            const pdfBuffer = await generatePdfBuffer(htmlContent);
+
+            // d. Kirim Email
+            const filename = `${type.toUpperCase()}_${employee.name || 'Report'}.pdf`;
+            await sendEmailWithPdf(trx.customer_email, `Download ${filename}`, pdfBuffer, filename);
+            
+            console.log(`✅ Sukses kirim PDF ke ${trx.customer_email}`);
+        }
+
+        res.status(200).json({ message: 'Webhook received' });
+    } catch (error) {
+        console.error("Webhook Failed:", error);
+        res.status(500).send('Webhook Processing Error');
+    }
+});
 
 // ====================================================
 // 📄 ROUTES PREVIEW HTML
@@ -233,7 +345,7 @@ app.post('/api/enhance-description', async (req: Request, res: Response): Promis
 });
 
 app.get('/', (req, res) => {
-    res.send('🚀 Backend Timesheet (With Excel DB Fetch Fix) is Running!');
+    res.send('🚀 Backend Timesheet (With Payment & Excel) is Running!');
 });
 
 // --- SERVER LISTENER ---
