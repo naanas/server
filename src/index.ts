@@ -104,13 +104,13 @@ app.post('/api/payment/create', async (req: Request, res: Response): Promise<any
         
         if (!email) return res.status(400).json({ error: "Email wajib diisi!" });
         
-        // --- LOGIKA HARGA & FEE YANG PROPER ---
+        // --- LOGIKA HARGA & FEE ---
         
         // 1. Base Price (Harga Jasa)
         let basePrice = type === 'mandays' ? 25000 : 20000; 
 
-        // 2. Admin Fee & Allowed Methods (Berdasarkan Pilihan User)
-        let adminFee = 4500; // Default VA
+        // 2. Admin Fee & Allowed Methods
+        let adminFee = 4500; 
         let allowedMethods: string[] = [];
 
         // Ambil Config dari DB
@@ -119,50 +119,42 @@ app.post('/api/payment/create', async (req: Request, res: Response): Promise<any
             const { data: pricingData } = await supabase.from('pricing_config').select('key, value');
             if (pricingData) pricingData.forEach((p: any) => priceMap[p.key] = Number(p.value));
             
-            // Override Base Price
             if (type === 'mandays' && priceMap.mandays_price) basePrice = priceMap.mandays_price;
             if (type === 'timesheet' && priceMap.timesheet_price) basePrice = priceMap.timesheet_price;
         } catch (e) { console.warn("DB Price Error", e); }
 
-        // Switch Logic (Menentukan Fee & Metode Xendit)
+        // --- UPDATE LOGIC DISINI ---
+        // Menambahkan kembali E-Wallet spesifik
         switch (paymentCategory) {
             case 'qris':
-                // Fee: Rp 1.000
+                // Fee: Rp 1.000 (Cover QRIS & E-Wallet)
                 adminFee = priceMap.fee_qris || 1000;
                 
-                // [FIX VERCEL ERROR] 
-                // Cukup 'QRIS'. Jangan masukkan 'GOPAY', 'OVO', 'SHOPEEPAY' dll.
-                // Jika salah satu dari itu belum aktif di dashboard, Vercel akan error 400.
-                // QRIS sudah universal bisa discan semua e-wallet.
-                allowedMethods = ['QRIS']; 
+                // Tambahkan semua E-Wallet populer.
+                // Jika error 400 lagi, berarti salah satu dari ini statusnya OFF di dashboard Xendit kamu.
+                allowedMethods = ['QRIS', 'GOPAY', 'SHOPEEPAY', 'OVO', 'DANA', 'LINKAJA']; 
                 break;
 
             case 'retail':
-                // Fee: Rp 6.500
+                // Fee: Rp 6.500 (Cover Indomaret/Alfamart)
                 adminFee = priceMap.fee_retail || 6500;
-                // Pastikan ALFAMART/INDOMARET aktif di Dashboard Xendit (Tab Configuration > Payment Methods)
                 allowedMethods = ['ALFAMART', 'INDOMARET'];
                 break;
 
             case 'va':
             default:
-                // Fee: Rp 4.500
+                // Fee: Rp 4.500 (Cover VA)
                 adminFee = priceMap.fee_va || 4500;
-                
-                // [FIX VERCEL ERROR]
-                // Gunakan hanya Bank Besar yang pasti aktif.
-                // Hapus BJB, BSI, CIMB sementara agar tidak error jika belum diaktivasi.
-                allowedMethods = ['BCA', 'BNI', 'BRI', 'MANDIRI', 'PERMATA'];
+                // Tambahkan Bank BSI, CIMB, dll jika di dashboard aktif
+                allowedMethods = ['BCA', 'BNI', 'BRI', 'MANDIRI', 'PERMATA', 'CIMB', 'BSI', 'BJB'];
                 break;
         }
 
-        const totalAmount = basePrice + adminFee; // TOTAL TAGIHAN
+        const totalAmount = basePrice + adminFee; 
         const externalId = `TRX-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        
-        // Deskripsi di Invoice (PENTING: User melihat ini)
         const description = `Export ${type ? type.toUpperCase() : 'DOC'} (Service Fee: Rp ${adminFee})`;
 
-        // a. Create Xendit Invoice (TOTAL AMOUNT, LIMITED METHODS)
+        // a. Create Xendit Invoice
         const invoice = await createInvoice(externalId, totalAmount, email, description, allowedMethods);
 
         // b. Simpan ke DB
@@ -186,7 +178,9 @@ app.post('/api/payment/create', async (req: Request, res: Response): Promise<any
 
     } catch (error: any) {
         console.error("Create Payment Error:", error);
-        res.status(500).json({ error: "Terjadi kesalahan pembayaran" });
+        // Tampilkan pesan error detail jika dari Xendit (misal method not available)
+        const msg = error.response?.message || error.message || "Terjadi kesalahan pembayaran";
+        res.status(500).json({ error: msg });
     }
 });
 
@@ -218,7 +212,7 @@ app.post('/api/payment/webhook', async (req: Request, res: Response): Promise<an
             const { employee, tasks: savedTasks, overtimeTasks } = trx.payload;
             const type = trx.type;
 
-            // --- RE-FETCH DB LOGIC (Agar data PDF lengkap sama seperti Preview/Excel) ---
+            // --- RE-FETCH DB LOGIC ---
             let combinedRegularTasks = [...(savedTasks || [])];
             if (employee.name) {
                 try {
@@ -261,49 +255,25 @@ app.post('/api/payment/webhook', async (req: Request, res: Response): Promise<an
 app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> => {
   try {
     const { type, employee, tasks: manualTasks, overtimeTasks } = req.body;
-    
-    // Gabung Manual Input + DB Data
     let combinedRegularTasks = [...(manualTasks || [])];
 
     if (employee.name) {
         try {
-            const dbTasks = await getTasksFromDB(
-                employee.name,
-                employee.periodStart,
-                employee.periodEnd
-            );
-            
+            const dbTasks = await getTasksFromDB(employee.name, employee.periodStart, employee.periodEnd);
             const mappedTasks = dbTasks.map((t: any) => ({
-                date: t.date,
-                description: t.description,
-                ticketNumber: t.ticket_number,
-                ticketLink: t.ticket_link
+                date: t.date, description: t.description, ticketNumber: t.ticket_number, ticketLink: t.ticket_link
             }));
-
             combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
-        } catch (err) {
-            console.warn("[DB Preview] Failed:", err);
-        }
+        } catch (err) { console.warn("[DB Preview] Failed:", err); }
     }
 
-    // Fetch Libur jika Timesheet
     let holidays: string[] = [];
     if (type === 'timesheet') {
-        const targetYear = employee.periodEnd 
-            ? new Date(employee.periodEnd).getFullYear() 
-            : new Date().getFullYear();
-            
+        const targetYear = employee.periodEnd ? new Date(employee.periodEnd).getFullYear() : new Date().getFullYear();
         holidays = await getIndonesianHolidays(targetYear);
     }
 
-    const htmlString = generatePreview(
-        type || 'mandays', 
-        employee, 
-        combinedRegularTasks, 
-        overtimeTasks || [],
-        holidays 
-    );
-    
+    const htmlString = generatePreview(type || 'mandays', employee, combinedRegularTasks, overtimeTasks || [], holidays);
     res.send(htmlString);
 
   } catch (error) {
@@ -312,79 +282,51 @@ app.post('/api/preview-html', async (req: Request, res: Response): Promise<any> 
   }
 });
 
-
 // ====================================================
 // 📎 ROUTES UTILS (Excel & AI)
 // ====================================================
 
-// Route Excel Timesheet
 app.post('/api/generate-timesheet', async (req: Request, res: Response): Promise<any> => {
     try {
         const { employee, tasks: manualTasks, overtimeTasks } = req.body;
-
-        // 1. FETCH DATA DB (Fix: Agar tidak kosong)
         let combinedRegularTasks = [...(manualTasks || [])];
         if (employee.name) {
             try {
                 const dbTasks = await getTasksFromDB(employee.name, employee.periodStart, employee.periodEnd);
                 const mappedTasks = dbTasks.map((t: any) => ({
-                    date: t.date,
-                    description: t.description,
-                    ticketNumber: t.ticket_number,
-                    ticketLink: t.ticket_link
+                    date: t.date, description: t.description, ticketNumber: t.ticket_number, ticketLink: t.ticket_link
                 }));
                 combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
             } catch (err) { console.warn("DB Fetch Error Excel:", err); }
         }
-
-        // 2. Fetch Libur
         const year = employee.periodEnd ? new Date(employee.periodEnd).getFullYear() : new Date().getFullYear();
         const holidays = await getIndonesianHolidays(year);
-
-        // 3. Generate Excel
         const buffer = await generateTimesheetExcel(employee, combinedRegularTasks, overtimeTasks, holidays);
         
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=Timesheet_${employee.name || 'Export'}.xlsx`);
         res.send(buffer);
-
-    } catch (error) {
-        console.error('Error Excel Timesheet:', error);
-        res.status(500).send('Error Generate Excel');
-    }
+    } catch (error) { res.status(500).send('Error Generate Excel'); }
 });
 
-// Route Excel Mandays
 app.post('/api/generate-mandays', async (req: Request, res: Response): Promise<any> => {
     try {
         const { employee, tasks: manualTasks, overtimeTasks } = req.body;
-
-        // 1. FETCH DATA DB (Fix: Agar tidak kosong)
         let combinedRegularTasks = [...(manualTasks || [])];
         if (employee.name) {
             try {
                 const dbTasks = await getTasksFromDB(employee.name, employee.periodStart, employee.periodEnd);
                 const mappedTasks = dbTasks.map((t: any) => ({
-                    date: t.date,
-                    description: t.description,
-                    ticketNumber: t.ticket_number,
-                    ticketLink: t.ticket_link
+                    date: t.date, description: t.description, ticketNumber: t.ticket_number, ticketLink: t.ticket_link
                 }));
                 combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
             } catch (err) { console.warn("DB Fetch Error Excel Mandays:", err); }
         }
-
-        // 2. Generate Excel Mandays
         const buffer = await generateMandaysExcel(employee, combinedRegularTasks, overtimeTasks);
-        
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=Mandays_${employee.name || 'Export'}.xlsx`);
         res.send(buffer);
-
-    } catch (error) {
-        console.error('Error Excel Mandays:', error);
-        res.status(500).send('Error Generate Excel Mandays');
-    }
+    } catch (error) { res.status(500).send('Error Generate Excel Mandays'); }
 });
 
 app.post('/api/enhance-description', async (req: Request, res: Response): Promise<any> => {
@@ -392,121 +334,69 @@ app.post('/api/enhance-description', async (req: Request, res: Response): Promis
       const { text } = req.body;
       const enhancedText = await generateProfessionalDescription(text);
       res.json({ text: enhancedText });
-    } catch (error) {
-        console.error('AI Error:', error);
-        res.status(500).send('AI Error');
-    }
+    } catch (error) { res.status(500).send('AI Error'); }
 });
 
 // ====================================================
 // 📊 ROUTES HISTORY & PRICING
 // ====================================================
 
-// GET HISTORY (FILTER BY USER ID)
 app.get('/api/history', async (req: Request, res: Response): Promise<any> => {
     const userId = req.query.user_id as string;
-    
-    if (!userId) {
-        return res.status(400).json({ error: "User ID parameter required" });
-    }
+    if (!userId) return res.status(400).json({ error: "User ID parameter required" });
 
     try {
         const { data, error } = await supabase
             .from('transactions')
             .select('*')
-            .eq('user_id', userId) // Filter punya user yang login
+            .eq('user_id', userId) 
             .order('created_at', { ascending: false })
             .limit(20);
-
         if (error) throw error;
         res.json(data);
-    } catch (error) {
-        console.error("Fetch History Error:", error);
-        res.status(500).json({ error: "Gagal mengambil history" });
-    }
+    } catch (error) { res.status(500).json({ error: "Gagal mengambil history" }); }
 });
 
-// CHECK STATUS MANUAL
 app.post('/api/payment/check-status', async (req: Request, res: Response): Promise<any> => {
     try {
         const { external_id } = req.body;
-        // Cari transaksi di DB
         const { data: trx } = await supabase.from('transactions').select('*').eq('external_id', external_id).single();
-        
         if (!trx) return res.status(404).json({ error: "Transaksi tidak ditemukan" });
-
-        // Jika sudah PAID, kembalikan saja
-        if (trx.status === 'PAID') return res.json({ status: 'PAID' });
-        
-        // Return status terkini (Di production bisa cek ke Xendit API di sini)
         res.json({ status: trx.status }); 
-    } catch (e) {
-        res.status(500).json({ error: "Gagal cek status" });
-    }
+    } catch (e) { res.status(500).json({ error: "Gagal cek status" }); }
 });
 
-// GET PRICING (ALL USERS - Include Admin Fee)
 app.get('/api/pricing', async (req: Request, res: Response): Promise<any> => {
     try {
-        const { data, error } = await supabase
-            .from('pricing_config')
-            .select('*');
+        const { data, error } = await supabase.from('pricing_config').select('*');
         if (error) throw error;
-        
         const pricingMap: any = {};
-        data.forEach((item: any) => {
-            pricingMap[item.key] = item.value;
-        });
-
+        data.forEach((item: any) => { pricingMap[item.key] = item.value; });
         res.json(pricingMap);
-    } catch (error) {
-        res.status(500).json({ error: "Gagal ambil harga" });
-    }
+    } catch (error) { res.status(500).json({ error: "Gagal ambil harga" }); }
 });
 
-// UPDATE PRICE (ROLE BASED: ADMIN ONLY)
 app.post('/api/pricing/update', async (req: Request, res: Response): Promise<any> => {
     const { user_id, updates } = req.body;
-
     if (!user_id) return res.status(401).json({ error: "Unauthorized" });
 
     try {
-        // 1. Cek Role di tabel profiles
-        const { data: profile, error } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', user_id)
-            .single();
+        const { data: profile, error } = await supabase.from('profiles').select('role').eq('id', user_id).single();
+        if (error || !profile || profile.role !== 'admin') return res.status(403).json({ error: "Unauthorized" });
 
-        if (error || !profile) {
-            return res.status(403).json({ error: "Gagal verifikasi user." });
-        }
-
-        // 2. KUNCI PENGAMAN: Hanya lolos jika role = 'admin'
-        if (profile.role !== 'admin') {
-            return res.status(403).json({ error: "AKSES DITOLAK: Anda bukan Admin!" });
-        }
-
-        // 3. Lakukan Update
         for (const update of updates) {
-            await supabase
-                .from('pricing_config')
+            await supabase.from('pricing_config')
                 .update({ value: update.value, updated_at: new Date(), updated_by: user_id })
                 .eq('key', update.key);
         }
-        res.json({ message: "Harga berhasil diupdate!" });
-
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Server Error" });
-    }
+        res.json({ message: "Updated" });
+    } catch (error) { res.status(500).json({ error: "Server Error" }); }
 });
 
 app.get('/', (req, res) => {
     res.send('🚀 Backend Timesheet (With Payment & Excel) is Running!');
 });
 
-// --- SERVER LISTENER ---
 if (process.env.NODE_ENV !== 'production') {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
