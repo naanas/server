@@ -12,8 +12,7 @@ export const createInvoice = async (externalId: string, amount: number, email: s
     // Tentukan URL Frontend kamu (Ganti jika sudah deploy ke Vercel)
     // Contoh Local: http://localhost:5173
     // Contoh Prod: https://timesheet-app.vercel.app
-    const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173'; 
-
+    const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
     const response = await Invoice.createInvoice({
         data: {
             externalId: externalId,
