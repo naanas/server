@@ -104,40 +104,50 @@ app.post('/api/payment/create', async (req: Request, res: Response): Promise<any
         
         if (!email) return res.status(400).json({ error: "Email wajib diisi!" });
         
-        // --- 1. LOGIKA PENENTUAN HARGA ---
+        // --- LOGIKA PENENTUAN HARGA & ADMIN FEE ---
         
-        // A. Set Harga Default (Jaga-jaga jika DB error/kosong)
-        let amount = type === 'mandays' ? 25000 : 20000; 
+        let basePrice = type === 'mandays' ? 25000 : 20000; 
+        let adminFee = 4500; // Default Fee (Xendit VA cover)
 
-        // B. Cek Harga Real-time dari Database (Admin Config)
         try {
-            const configKey = type === 'mandays' ? 'mandays_price' : 'timesheet_price';
-            
+            // Ambil semua config harga sekaligus dari DB
             const { data: pricingData } = await supabase
                 .from('pricing_config')
-                .select('value')
-                .eq('key', configKey)
-                .single();
+                .select('key, value');
 
-            if (pricingData && pricingData.value) {
-                amount = Number(pricingData.value); // Override harga default
+            if (pricingData) {
+                // Mapping biar gampang akses
+                const priceMap: any = {};
+                pricingData.forEach((p: any) => priceMap[p.key] = Number(p.value));
+
+                // Override nilai default jika ada di DB
+                if (type === 'mandays' && priceMap.mandays_price) basePrice = priceMap.mandays_price;
+                if (type === 'timesheet' && priceMap.timesheet_price) basePrice = priceMap.timesheet_price;
+                if (priceMap.admin_fee) adminFee = priceMap.admin_fee;
             }
         } catch (e) {
-            console.warn("Gagal mengambil dynamic price, menggunakan harga default.", e);
+            console.warn("Gagal ambil pricing config, pakai default.", e);
         }
 
+        const totalAmount = basePrice + adminFee; // TOTAL YANG HARUS DIBAYAR USER
+
+        // ----------------------------------
+
         const externalId = `TRX-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        const description = `Premium Export: ${type ? type.toUpperCase() : 'TIMESHEET'} Report`;
+        
+        // Deskripsi di Invoice Xendit
+        const description = `Export ${type ? type.toUpperCase() : 'DOC'} (Price: ${basePrice} + Svc Fee: ${adminFee})`;
 
-        // a. Create Xendit Invoice
-        const invoice = await createInvoice(externalId, amount, email, description);
+        // a. Create Xendit Invoice (TOTAL AMOUNT)
+        const invoice = await createInvoice(externalId, totalAmount, email, description);
 
-        // b. Simpan ke DB dengan USER_ID
+        // b. Simpan ke DB dengan USER_ID & Detail Fee
         const { error } = await supabase.from('transactions').insert({
             external_id: externalId,
-            amount: amount,        // Simpan harga deal saat transaksi dibuat
+            amount: totalAmount,   // Total bayar
+            admin_fee: adminFee,   // Simpan fee terpisah
             customer_email: email, // Email tujuan PDF
-            user_id: user_id,      // ID Akun yang login (PENTING)
+            user_id: user_id,      // ID Akun yang login
             type: type || 'timesheet',
             status: 'PENDING',
             payload: { employee, tasks, overtimeTasks } 
@@ -411,7 +421,7 @@ app.post('/api/payment/check-status', async (req: Request, res: Response): Promi
     }
 });
 
-// GET PRICING (ALL USERS)
+// GET PRICING (ALL USERS - Include Admin Fee)
 app.get('/api/pricing', async (req: Request, res: Response): Promise<any> => {
     try {
         const { data, error } = await supabase
