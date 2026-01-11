@@ -99,58 +99,73 @@ app.get('/api/assignees', async (req: Request, res: Response): Promise<any> => {
 // 1. Create Invoice (Frontend Request Link Bayar)
 app.post('/api/payment/create', async (req: Request, res: Response): Promise<any> => {
     try {
-        // Terima user_id dari frontend
-        const { employee, tasks, overtimeTasks, type, email, user_id } = req.body;
+        // Terima user_id dan paymentCategory dari frontend
+        const { employee, tasks, overtimeTasks, type, email, user_id, paymentCategory } = req.body;
         
         if (!email) return res.status(400).json({ error: "Email wajib diisi!" });
         
-        // --- LOGIKA PENENTUAN HARGA & ADMIN FEE ---
+        // --- LOGIKA HARGA & FEE YANG PROPER ---
         
+        // 1. Base Price (Harga Jasa)
         let basePrice = type === 'mandays' ? 25000 : 20000; 
-        let adminFee = 4500; // Default Fee (Xendit VA cover)
 
+        // 2. Admin Fee & Allowed Methods (Berdasarkan Pilihan User)
+        let adminFee = 4500; // Default VA
+        let allowedMethods: string[] = [];
+
+        // Ambil Config dari DB
+        let priceMap: any = {};
         try {
-            // Ambil semua config harga sekaligus dari DB
-            const { data: pricingData } = await supabase
-                .from('pricing_config')
-                .select('key, value');
+            const { data: pricingData } = await supabase.from('pricing_config').select('key, value');
+            if (pricingData) pricingData.forEach((p: any) => priceMap[p.key] = Number(p.value));
+            
+            // Override Base Price
+            if (type === 'mandays' && priceMap.mandays_price) basePrice = priceMap.mandays_price;
+            if (type === 'timesheet' && priceMap.timesheet_price) basePrice = priceMap.timesheet_price;
+        } catch (e) { console.warn("DB Price Error", e); }
 
-            if (pricingData) {
-                // Mapping biar gampang akses
-                const priceMap: any = {};
-                pricingData.forEach((p: any) => priceMap[p.key] = Number(p.value));
-
-                // Override nilai default jika ada di DB
-                if (type === 'mandays' && priceMap.mandays_price) basePrice = priceMap.mandays_price;
-                if (type === 'timesheet' && priceMap.timesheet_price) basePrice = priceMap.timesheet_price;
-                if (priceMap.admin_fee) adminFee = priceMap.admin_fee;
-            }
-        } catch (e) {
-            console.warn("Gagal ambil pricing config, pakai default.", e);
+        // Switch Logic (Menentukan Fee & Metode Xendit)
+        switch (paymentCategory) {
+            case 'qris':
+                // Fee: Rp 1.000 (Cover QRIS 0.7% & E-Wallet 1.5%)
+                adminFee = priceMap.fee_qris || 1000;
+                // Batasi hanya QRIS dan E-Wallet
+                allowedMethods = ['QRIS', 'EWALLET', 'DANA', 'OVO', 'SHOPEEPAY', 'LINKAJA', 'GOPAY'];
+                break;
+            case 'retail':
+                // Fee: Rp 6.500 (Cover Indomaret 5.500 + PPN)
+                adminFee = priceMap.fee_retail || 6500;
+                // Batasi hanya Retail
+                allowedMethods = ['ALFAMART', 'INDOMARET'];
+                break;
+            case 'va':
+            default:
+                // Fee: Rp 4.500 (Cover VA 4.000 + PPN)
+                adminFee = priceMap.fee_va || 4500;
+                // Batasi hanya Virtual Accounts
+                allowedMethods = ['BCA', 'BNI', 'BRI', 'MANDIRI', 'PERMATA', 'BSI', 'CIMB', 'BJB'];
+                break;
         }
 
-        const totalAmount = basePrice + adminFee; // TOTAL YANG HARUS DIBAYAR USER
-
-        // ----------------------------------
-
+        const totalAmount = basePrice + adminFee; // TOTAL TAGIHAN
         const externalId = `TRX-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
         
-        // Deskripsi di Invoice Xendit
-        const description = `Export ${type ? type.toUpperCase() : 'DOC'} (Price: ${basePrice} + Svc Fee: ${adminFee})`;
+        // Deskripsi di Invoice (PENTING: User melihat ini)
+        const description = `Export ${type ? type.toUpperCase() : 'DOC'} (Service Fee: Rp ${adminFee})`;
 
-        // a. Create Xendit Invoice (TOTAL AMOUNT)
-        const invoice = await createInvoice(externalId, totalAmount, email, description);
+        // a. Create Xendit Invoice (TOTAL AMOUNT, LIMITED METHODS)
+        const invoice = await createInvoice(externalId, totalAmount, email, description, allowedMethods);
 
-        // b. Simpan ke DB dengan USER_ID & Detail Fee
+        // b. Simpan ke DB
         const { error } = await supabase.from('transactions').insert({
             external_id: externalId,
-            amount: totalAmount,   // Total bayar
-            admin_fee: adminFee,   // Simpan fee terpisah
-            customer_email: email, // Email tujuan PDF
-            user_id: user_id,      // ID Akun yang login
+            amount: totalAmount,
+            admin_fee: adminFee,
+            customer_email: email,
+            user_id: user_id,
             type: type || 'timesheet',
             status: 'PENDING',
-            payload: { employee, tasks, overtimeTasks } 
+            payload: { employee, tasks, overtimeTasks, paymentCategory } 
         });
 
         if (error) {
@@ -421,7 +436,7 @@ app.post('/api/payment/check-status', async (req: Request, res: Response): Promi
     }
 });
 
-// GET PRICING (ALL USERS - Include Admin Fee)
+// GET PRICING (ALL USERS - Include Admin Fee Options)
 app.get('/api/pricing', async (req: Request, res: Response): Promise<any> => {
     try {
         const { data, error } = await supabase
