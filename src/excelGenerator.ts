@@ -15,12 +15,14 @@ const leftStyle: Partial<ExcelJS.Alignment> = { vertical: 'middle', horizontal: 
 const boldFont = { bold: true };
 
 // Warna Background
-const fillHeader: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } }; // Abu Gelap
-const fillHoliday: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFECEC' } }; // Merah Muda
-const fillWeekend: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F3F3' } }; // Abu Terang
+const fillHeader: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA6A6A6' } }; // Darker Gray per image
+const fillHoliday: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } }; // Pinkish Red
+const fillWeekend: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } }; // Gray
+const fillWeekendLight: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEAEAEA' } }; // Lighter Gray
+
 
 // ==========================================
-// 1. GENERATOR TIMESHEET (SUDAH FIX)
+// 1. GENERATOR TIMESHEET (SUDAH FIX - IMAGE ALIGNMENT)
 // ==========================================
 export const generateTimesheetExcel = async (
     employee: any,
@@ -29,7 +31,9 @@ export const generateTimesheetExcel = async (
     holidays: string[] = []
 ) => {
     const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Timesheet');
+    const sheet = workbook.addWorksheet('Timesheet', {
+        pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1 }
+    });
 
     // --- A. SETUP TANGGAL ---
     let endDate = employee.periodEnd ? dayjs(employee.periodEnd) : dayjs().date(25);
@@ -38,7 +42,7 @@ export const generateTimesheetExcel = async (
 
     const startMonthStr = startDate.format('MMMM').toUpperCase();
     const endMonthStr = endDate.format('MMMM').toUpperCase();
-    const periodDisplay = startMonthStr === endMonthStr ? startMonthStr : `${startMonthStr} TO ${endMonthStr}`;
+    const periodDisplay = startMonthStr === endMonthStr ? startMonthStr : `${startMonthStr}     TO     ${endMonthStr}`;
 
     const dateHeaders: { date: string, label: string, isWeekend: boolean }[] = [];
     let curr = startDate.clone();
@@ -51,7 +55,13 @@ export const generateTimesheetExcel = async (
         curr = curr.add(1, 'day');
     }
 
-    // --- B. DATA MAPPING ---
+    // --- B. SETUP COLUMNS (A for code, B for Label, C for dates...) ---
+    sheet.getColumn(1).width = 4; // A (Code)
+    sheet.getColumn(2).width = 16; // B (Label)
+    // Date columns
+    dateHeaders.forEach((_, i) => sheet.getColumn(3 + i).width = 3.5);
+
+    // --- C. DATA MAPPING ---
     const dataMap: Record<string, { status: string, ot: number, isHoliday: boolean }> = {};
 
     let HOLIDAYS = holidays;
@@ -110,7 +120,7 @@ export const generateTimesheetExcel = async (
     });
 
     const stats = { wh: 0, ot: 0, h: 0, al: 0, s: 0, u: 0, c: 0, totalDays: 0 };
-    Object.values(dataMap).forEach(d => {
+    Object.values(dataMap).forEach((d: { status: string, ot: number, isHoliday: boolean }) => {
         if (d.status === '8') { stats.wh += 8; stats.totalDays++; }
         else if (d.status === 'H') stats.h++;
         else if (d.status === 'AL') stats.al++;
@@ -120,36 +130,87 @@ export const generateTimesheetExcel = async (
         stats.ot += d.ot;
     });
 
-    // --- C. BUILD EXCEL UI ---
-    sheet.mergeCells('A1:AG1');
-    const titleCell = sheet.getCell('A1');
+    // --- D. HEADER UI ---
+    // Row 2: Title "Pegadaian ... REKAPITULASI ... PESONNA OPTIMA JASA"
+    const titleRow = sheet.getRow(2);
+    titleRow.height = 30; // Tall row for logos
+
+    // Fake Logo Pegadaian in A2-D2
+    sheet.mergeCells('A2:H2');
+    const logoPegadaianCell = sheet.getCell('A2');
+    logoPegadaianCell.value = 'Pegadaian'; // Placeholder
+    logoPegadaianCell.font = { name: 'Arial', bold: true, size: 20, color: { argb: 'FF00B050' } };
+    logoPegadaianCell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+    // Main Titles
+    sheet.mergeCells('I2:W2');
+    const titleCell = sheet.getCell('I2');
     titleCell.value = 'REKAPITULASI PERHITUNGAN LEMBAR KERJA';
-    titleCell.font = { bold: true, size: 14 };
-    titleCell.alignment = centerStyle;
+    titleCell.font = { name: 'Arial', bold: true, size: 14 };
+    titleCell.alignment = { vertical: 'top', horizontal: 'center' };
 
-    sheet.mergeCells('A2:AG2');
-    const subTitleCell = sheet.getCell('A2');
-    subTitleCell.value = 'PT Pesonna Optima Jasa';
-    subTitleCell.font = { size: 11 };
-    subTitleCell.alignment = centerStyle;
+    sheet.mergeCells('I3:W3');
+    const subtitleCell = sheet.getCell('I3');
+    subtitleCell.value = 'PT Pesonna Optima Jasa';
+    subtitleCell.font = { name: 'Arial', bold: true, size: 12 };
+    subtitleCell.alignment = { vertical: 'top', horizontal: 'center' };
 
-    const infoData = [
-        ['Client Site', ':', employee.clientSite || '', 'Squad', ':', employee.squad || ''],
-        ['Work Unit', ':', employee.workUnit || '', 'Employee Name', ':', (employee.reportName || employee.name || '').toUpperCase()],
-        ['Dept. Head Name', ':', employee.deptHead || '', 'Employee No.', ':', employee.no || ''],
-        ['Supervisor', ':', employee.supervisor || '', 'Month', ':', periodDisplay]
+    // Fake Logo POJ
+    sheet.mergeCells('Y2:AG2');
+    const logoPojCell = sheet.getCell('Y2');
+    logoPojCell.value = 'PESONNA OPTIMA JASA'; // Placeholder
+    logoPojCell.font = { name: 'Arial', bold: true, size: 16, color: { argb: 'FF92D050' } };
+    logoPojCell.alignment = { vertical: 'middle', horizontal: 'right' };
+
+    // Info Block Rows 6-9
+    const infoLeft = [
+        ['Client Site', ':', employee.clientSite || 'Divisi Pengembangan Aplikasi TI - PT Pegadaian'],
+        ['Work Unit', ':', employee.workUnit || ''],
+        ['Dept. Head Name', ':', employee.deptHead || ''],
+        ['Supervisor', ':', employee.supervisor || '']
     ];
 
-    infoData.forEach((row, i) => {
-        const r = sheet.getRow(4 + i);
-        r.getCell(1).value = row[0]; r.getCell(2).value = row[1]; r.getCell(3).value = row[2]; r.getCell(3).font = boldFont;
-        r.getCell(18).value = row[3]; r.getCell(19).value = row[4]; r.getCell(20).value = row[5]; r.getCell(20).font = boldFont;
-    });
+    const infoRight = [
+        ['Squad', ':', employee.squad || ''],
+        ['Employee Name', ':', (employee.reportName || employee.name || '').toUpperCase()],
+        ['Employee Number', ':', employee.no || ''],
+        ['Month', ':', periodDisplay]
+    ];
 
-    const headerRowIdx = 9;
+    for (let i = 0; i < 4; i++) {
+        const r = sheet.getRow(6 + i);
+        r.height = 15;
+        r.getCell(1).value = infoLeft[i][0]; r.getCell(1).font = { size: 9 };
+        sheet.mergeCells(`A${6 + i}:B${6 + i}`); // Span "Client Site" over A and B
+
+        r.getCell(3).value = infoLeft[i][1]; r.getCell(3).font = { size: 9 };
+        r.getCell(4).value = infoLeft[i][2]; r.getCell(4).font = { size: 9, bold: true, underline: true };
+        sheet.mergeCells(`D${6 + i}:K${6 + i}`); // Span values
+
+        // Right side in Col S (19), T (20), U (21+)
+        r.getCell(19).value = infoRight[i][0]; r.getCell(19).font = { size: 9 };
+        sheet.mergeCells(`S${6 + i}:T${6 + i}`);
+
+        r.getCell(21).value = infoRight[i][1]; r.getCell(21).font = { size: 9 };
+        r.getCell(22).value = infoRight[i][2]; r.getCell(22).font = { size: 9, bold: true, underline: true };
+        sheet.mergeCells(`V${6 + i}:AD${6 + i}`);
+    }
+
+    // Row 11: Date Headers
+    const headerRowIdx = 11;
     const headerRow = sheet.getRow(headerRowIdx);
-    headerRow.getCell(1).value = 'Code';
-    headerRow.getCell(2).value = 'Category';
+    headerRow.height = 18;
+
+    headerRow.getCell(1).value = 'Date';
+    sheet.mergeCells(`A${headerRowIdx}:B${headerRowIdx}`);
+    const dateLabelCell = headerRow.getCell(1);
+    dateLabelCell.fill = fillHeader;
+    dateLabelCell.border = borderStyle;
+    dateLabelCell.alignment = centerStyle;
+    dateLabelCell.font = { name: 'Arial', bold: true, size: 9 };
+
+    // Set individual borders for merged cells A and B in header
+    ['A', 'B'].forEach(col => { sheet.getCell(`${col}${headerRowIdx}`).border = borderStyle; });
 
     dateHeaders.forEach((h, i) => {
         const cell = headerRow.getCell(3 + i);
@@ -157,27 +218,29 @@ export const generateTimesheetExcel = async (
         cell.fill = fillHeader;
         cell.border = borderStyle;
         cell.alignment = centerStyle;
-        sheet.getColumn(3 + i).width = 4;
+        cell.font = { name: 'Arial', bold: true, size: 9 };
     });
 
-    ['A', 'B'].forEach(col => {
-        const c = sheet.getCell(`${col}${headerRowIdx}`);
-        c.fill = fillHeader;
-        c.border = borderStyle;
-        c.alignment = centerStyle;
-        c.font = boldFont;
-    });
+    // Optional: an empty end column for spacing? Image stops right after the 25
 
-    const buildExcelRow = (code: string, label: string, type: 'status' | 'ot' | 'check') => {
-        const row = sheet.addRow([code, label]);
+    // Row data rendering function
+    let currentRow = 13;
+    const buildExcelRow = (code: string, label: string, type: 'status' | 'ot' | 'check', drawBorderCodes: boolean = true) => {
+        const row = sheet.getRow(currentRow++);
+        row.height = 16;
 
-        row.getCell(1).fill = fillHeader;
-        row.getCell(1).font = boldFont;
-        row.getCell(1).alignment = centerStyle;
-        row.getCell(1).border = borderStyle;
+        row.getCell(1).value = code;
+        row.getCell(2).value = label;
 
-        row.getCell(2).alignment = { ...leftStyle, indent: 1 };
-        row.getCell(2).border = borderStyle;
+        row.getCell(1).font = { name: 'Arial', size: 9 };
+        row.getCell(2).font = { name: 'Arial', size: 9 };
+
+        if (drawBorderCodes) {
+            row.getCell(1).border = borderStyle;
+            row.getCell(2).border = borderStyle;
+            row.getCell(1).alignment = centerStyle;
+            row.getCell(2).alignment = { ...leftStyle, indent: 1 };
+        }
 
         dateHeaders.forEach((h, i) => {
             const cell = row.getCell(3 + i);
@@ -185,7 +248,7 @@ export const generateTimesheetExcel = async (
             let val: string | number = '';
 
             if (item.isHoliday) cell.fill = fillHoliday;
-            else if (h.isWeekend) cell.fill = fillWeekend;
+            else if (h.isWeekend) cell.fill = fillWeekendLight;
 
             if (type === 'ot') {
                 val = item.ot > 0 ? item.ot : '';
@@ -199,22 +262,36 @@ export const generateTimesheetExcel = async (
             cell.value = val;
             cell.border = borderStyle;
             cell.alignment = centerStyle;
+            cell.font = { name: 'Arial', size: 9, bold: (item.status === 'H' || item.status === 'W' || item.status === 'AL') };
+
+            // Image shows red text for H / AL ?
+            if (val === 'H') cell.font = { ...cell.font, color: { argb: 'FFFF0000' } };
         });
     };
 
-    buildExcelRow('WH', 'Work Hours', 'status');
-    buildExcelRow('OT', 'Over Time', 'ot');
+    buildExcelRow('WH', '- Work Hours', 'status');
+    buildExcelRow('OT', '- Over Time', 'ot');
+
+    currentRow++; // Empty row in between
+    sheet.getRow(currentRow - 1).height = 8; // Small spacer row
+
     buildExcelRow('H', '- Holidays', 'check');
     buildExcelRow('AL', '- Annual Leave', 'check');
-    buildExcelRow('S', 'Sick Leave', 'check');
-    buildExcelRow('U', 'Unpaid Leave', 'check');
-    buildExcelRow('C', 'Comp. Off', 'check');
+    buildExcelRow('S', '- Sick Leave', 'check');
+    buildExcelRow('U', '- Unpaid Leave', 'check');
+    buildExcelRow('C', '- Comp. Off', 'check');
     buildExcelRow('W', '- Weekend', 'check');
 
-    const totalRow = sheet.addRow(['', 'Total']);
-    totalRow.getCell(2).alignment = { horizontal: 'right' };
-    totalRow.getCell(2).font = boldFont;
+    // Total Row (Row 23)
+    const totalRow = sheet.getRow(currentRow++);
+    totalRow.height = 18;
+    totalRow.getCell(2).value = 'Total';
+    totalRow.getCell(2).font = { name: 'Arial', bold: true, size: 9 };
     totalRow.getCell(2).border = borderStyle;
+    totalRow.getCell(2).alignment = { horizontal: 'right', vertical: 'middle' };
+
+    // Need border for A as well to look complete?
+    totalRow.getCell(1).border = borderStyle;
 
     dateHeaders.forEach((h, i) => {
         const cell = totalRow.getCell(3 + i);
@@ -226,81 +303,151 @@ export const generateTimesheetExcel = async (
         if (val > 0) cell.value = val;
         cell.border = borderStyle;
         cell.alignment = centerStyle;
-        cell.font = boldFont;
-        if (h.isWeekend) cell.fill = fillWeekend;
+        cell.font = { name: 'Arial', bold: true, size: 9 };
+        if (d.isHoliday) cell.fill = fillHoliday;
+        else if (h.isWeekend) cell.fill = fillWeekendLight;
     });
 
-    let currentRow = 20;
-    const recapHeader = sheet.getRow(currentRow);
-    recapHeader.getCell(1).value = 'RECAP';
-    recapHeader.getCell(3).value = 'Hours';
-    recapHeader.getCell(4).value = 'Days';
-    sheet.mergeCells(`A${currentRow}:B${currentRow}`);
+    // Notes Below Table (Row 24)
+    const infoRow = sheet.getRow(currentRow++);
+    sheet.mergeCells(`A${currentRow - 1}:AF${currentRow - 1}`);
+    infoRow.getCell(1).value = 'Please write the corresponding alphabets (AL for Annual Leave, S for Sick Leave, C for Comp Off, etc) against the appropriate date.';
+    infoRow.getCell(1).font = { name: 'Arial', italic: true, size: 8 };
+    infoRow.height = 16;
 
-    ['A', 'C', 'D'].forEach(c => {
-        const cell = recapHeader.getCell(c === 'A' ? 1 : (c === 'C' ? 3 : 4));
-        cell.fill = fillHeader;
-        cell.font = boldFont;
-        cell.border = borderStyle;
-        cell.alignment = centerStyle;
+    currentRow += 2; // Jump to Recap
+
+    // --- FOOTER SECTION ---
+    const footerStart = currentRow; // ~27
+
+    // RECAP Block (Cols A-C)
+    const recapHeaderRow = sheet.getRow(footerStart);
+    recapHeaderRow.getCell(1).value = 'RECAP';
+    sheet.mergeCells(`A${footerStart}:B${footerStart}`);
+    recapHeaderRow.getCell(3).value = 'Hours';
+    recapHeaderRow.getCell(4).value = 'Days';
+
+    ['A', 'B', 'C', 'D'].forEach(col => {
+        const c = sheet.getCell(`${col}${footerStart}`);
+        c.fill = fillHeader;
+        c.font = { name: 'Arial', bold: true, size: 9 };
+        c.border = borderStyle;
+        c.alignment = centerStyle;
     });
+    sheet.getColumn(3).width = 7.5;
+    sheet.getColumn(4).width = 7.5;
 
-    const addRecapRow = (label: string, desc: string, valHours: any, valDays: any) => {
-        currentRow++;
-        const r = sheet.getRow(currentRow);
-        r.getCell(1).value = label; r.getCell(1).font = boldFont; r.getCell(1).alignment = centerStyle;
-        r.getCell(2).value = desc; r.getCell(2).alignment = { horizontal: 'left', indent: 1 };
-        r.getCell(3).value = valHours; r.getCell(3).alignment = centerStyle;
-        r.getCell(4).value = valDays; r.getCell(4).alignment = centerStyle;
-        [1, 2, 3, 4].forEach(c => r.getCell(c).border = borderStyle);
+    const addRecap = (idxOffset: number, lbl1: string, lbl2: string, vHrs: number | string, vDays: number | string) => {
+        const r = sheet.getRow(footerStart + idxOffset);
+        r.getCell(1).value = lbl1;
+        r.getCell(2).value = lbl2;
+        r.getCell(3).value = vHrs;
+        r.getCell(4).value = vDays;
+
+        [1, 2, 3, 4].forEach(col => {
+            const c = r.getCell(col);
+            c.border = borderStyle;
+            c.font = { name: 'Arial', size: 9, bold: (idxOffset === 8) }; // Total is offset 8
+            if (col === 1) c.alignment = centerStyle;
+            else if (col === 2) c.alignment = { horizontal: 'left', vertical: 'middle' };
+            else c.alignment = centerStyle;
+        });
     };
 
-    addRecapRow('WH', 'Work Hours', stats.wh, stats.totalDays);
-    addRecapRow('OT', 'Over Time', stats.ot, '-');
-    addRecapRow('AL', 'Annual Leave', '-', stats.al);
-    addRecapRow('S', 'Sick Leave', '-', stats.s);
-    addRecapRow('H', 'Holiday', '-', stats.h);
-    addRecapRow('U', 'Unpaid Leave', '-', stats.u);
-    addRecapRow('C', 'Comp. Off', '-', stats.c);
+    addRecap(1, 'WH', '- Work Hours', stats.wh, stats.totalDays);
+    addRecap(2, 'OT', '- Over Time', stats.ot, 0); // Image showed 0 if 0
+    addRecap(3, 'H', '- Holidays', stats.h * 8, stats.h);
+    addRecap(4, 'AL', '- Annual Leave', stats.al * 8, stats.al);
+    addRecap(5, 'S', '- Sick Leave', stats.s * 8, stats.s);
+    addRecap(6, 'U', '- Unpaid Leave', stats.u * 8, stats.u);
+    addRecap(7, 'C', '- Comp. Off', stats.c * 8, stats.c);
 
-    currentRow++;
-    const totalRecap = sheet.getRow(currentRow);
-    totalRecap.getCell(1).value = 'Total';
-    sheet.mergeCells(`A${currentRow}:B${currentRow}`);
-    totalRecap.getCell(1).alignment = centerStyle;
-    totalRecap.getCell(1).font = boldFont;
-    totalRecap.getCell(1).fill = fillWeekend;
+    // TOTAL
+    addRecap(8, 'TOTAL', '', stats.wh + stats.ot + (stats.h + stats.al + stats.s + stats.u + stats.c) * 8, stats.totalDays + stats.h + stats.al + stats.s + stats.u + stats.c);
+    sheet.mergeCells(`A${footerStart + 8}:B${footerStart + 8}`);
+    sheet.getCell(`A${footerStart + 8}`).value = 'TOTAL';
+    sheet.getCell(`A${footerStart + 8}`).alignment = { horizontal: 'left', vertical: 'middle' }; // In image it's on left
 
-    totalRecap.getCell(3).value = stats.wh + stats.ot;
-    totalRecap.getCell(4).value = stats.totalDays + stats.al + stats.s + stats.h + stats.u + stats.c;
-    [1, 3, 4].forEach(c => { const cell = totalRecap.getCell(c); cell.border = borderStyle; cell.alignment = centerStyle; });
+    // Signatures Block (Cols F - AA)
+    const signTopRow = sheet.getRow(footerStart - 1); // Row above recap for CERTIFY
+    sheet.mergeCells(`G${footerStart - 1}:U${footerStart - 1}`);
+    const certifyCell = signTopRow.getCell(7);
+    certifyCell.value = `" I CERTIFY THAT THE ABOVE IS A TRUE RECORD OF MY TIME FOR THIS PERIOD "`;
+    certifyCell.font = { name: 'Arial', size: 8 };
 
-    const signRowIdx = 20;
-    sheet.mergeCells(`G${signRowIdx}:Q${signRowIdx}`);
-    const certify = sheet.getCell(`G${signRowIdx}`);
-    certify.value = `"I CERTIFY THAT THE ABOVE IS A TRUE RECORD OF MY TIME FOR THIS PERIOD FROM ${periodDisplay}"`;
-    certify.font = { italic: true, size: 9 };
+    const signPeriodRow = sheet.getRow(footerStart);
+    sheet.mergeCells(`G${footerStart}:K${footerStart}`);
+    const fromCell = signPeriodRow.getCell(7);
+    fromCell.value = `FROM: ${periodDisplay}`;
+    fromCell.font = { name: 'Arial', size: 8, bold: true };
 
-    const signHeaderRow = sheet.getRow(signRowIdx + 2);
-    signHeaderRow.getCell(7).value = 'Employee'; sheet.mergeCells(`G${signRowIdx + 2}:I${signRowIdx + 2}`); signHeaderRow.getCell(7).alignment = centerStyle; signHeaderRow.getCell(7).font = boldFont;
-    signHeaderRow.getCell(11).value = 'Supervisor'; sheet.mergeCells(`K${signRowIdx + 2}:M${signRowIdx + 2}`); signHeaderRow.getCell(11).alignment = centerStyle; signHeaderRow.getCell(11).font = boldFont;
-    signHeaderRow.getCell(15).value = 'Dept. Head'; sheet.mergeCells(`O${signRowIdx + 2}:Q${signRowIdx + 2}`); signHeaderRow.getCell(15).alignment = centerStyle; signHeaderRow.getCell(15).font = boldFont;
+    // Headers (Employee, Supervisor, Dept Head)
+    const signRoleRow = sheet.getRow(footerStart + 1);
+    signRoleRow.getCell(9).value = 'Employee'; signRoleRow.getCell(9).font = { name: 'Arial', bold: true, size: 9 };
+    signRoleRow.getCell(15).value = 'Supervisor'; signRoleRow.getCell(15).font = { name: 'Arial', bold: true, size: 9 };
+    signRoleRow.getCell(21).value = 'Departemen Head'; signRoleRow.getCell(21).font = { name: 'Arial', bold: true, size: 9 };
 
-    const signNameRow = sheet.getRow(signRowIdx + 7);
-    signNameRow.getCell(7).value = (employee.reportName || employee.name || '').toUpperCase(); sheet.mergeCells(`G${signRowIdx + 7}:I${signRowIdx + 7}`); signNameRow.getCell(7).alignment = centerStyle; signNameRow.getCell(7).font = { underline: true, bold: true };
-    signNameRow.getCell(11).value = employee.supervisor; sheet.mergeCells(`K${signRowIdx + 7}:M${signRowIdx + 7}`); signNameRow.getCell(11).alignment = centerStyle; signNameRow.getCell(11).font = { underline: true, bold: true };
-    signNameRow.getCell(15).value = employee.deptHead; sheet.mergeCells(`O${signRowIdx + 7}:Q${signRowIdx + 7}`); signNameRow.getCell(15).alignment = centerStyle; signNameRow.getCell(15).font = { underline: true, bold: true };
-
-    const signDateRow = sheet.getRow(signRowIdx + 8);
-    const dateStr = `Date: ${employee.periodEnd ? dayjs(employee.periodEnd).format('DD/MM/YYYY') : '-'}`;
-    [7, 11, 15].forEach(col => {
-        signDateRow.getCell(col).value = dateStr;
-        sheet.mergeCells(`${sheet.getColumn(col).letter}${signRowIdx + 8}:${sheet.getColumn(col + 2).letter}${signRowIdx + 8}`);
-        signDateRow.getCell(col).alignment = { horizontal: 'center' };
-        signDateRow.getCell(col).font = { size: 9 };
+    // Names (Underlined)
+    const signNameRow = sheet.getRow(footerStart + 6);
+    // Lines under names in image are full width
+    [9, 15, 21].forEach(c => {
+        // Just applying thick bottom border
+        const cell = signNameRow.getCell(c);
+        cell.border = { bottom: { style: 'thin' } };
     });
 
-    sheet.getColumn(1).width = 5; sheet.getColumn(2).width = 20;
+    const signNameTextRow = sheet.getRow(footerStart + 7);
+    // A bit messy positioning exactly without merge, but centering to columns
+    signNameTextRow.getCell(9).value = (employee.reportName || employee.name || '').toUpperCase();
+    signNameTextRow.getCell(15).value = employee.supervisor;
+    signNameTextRow.getCell(21).value = employee.deptHead;
+
+    [9, 15, 21].forEach(c => {
+        const cell = signNameTextRow.getCell(c);
+        cell.font = { name: 'Arial', bold: true, size: 9 };
+        cell.alignment = { horizontal: 'center' };
+        // Draw line above
+        sheet.getCell(sheet.getColumn(c - 1).letter + (footerStart + 6)).border = { bottom: { style: 'thin' } };
+        sheet.getCell(sheet.getColumn(c).letter + (footerStart + 6)).border = { bottom: { style: 'thin' } };
+        sheet.getCell(sheet.getColumn(c + 1).letter + (footerStart + 6)).border = { bottom: { style: 'thin' } };
+        sheet.getCell(sheet.getColumn(c + 2).letter + (footerStart + 6)).border = { bottom: { style: 'thin' } };
+    });
+
+    // Add line to the left of Employee start and right of Dept Head to frame it loosely if wanted, but image shows floating underscores
+
+    const signDateRow = sheet.getRow(footerStart + 8);
+    const dateStr = employee.periodEnd ? dayjs(employee.periodEnd).format('DD / MM / YYYY') : '-';
+
+    [9, 15, 21].forEach(c => {
+        signDateRow.getCell(c).value = `Date:   ${dateStr}`;
+        signDateRow.getCell(c).font = { name: 'Arial', size: 8 };
+        signDateRow.getCell(c).alignment = { horizontal: 'center' };
+    });
+
+    // NOTES Box (Cols V/W - ...)
+    sheet.mergeCells(`W${footerStart - 1}:AC${footerStart + 6}`); // Big Box
+    const notesBox = sheet.getCell(`W${footerStart - 1}`);
+    notesBox.value = 'NOTES:';
+    notesBox.font = { name: 'Arial', bold: true, size: 8 };
+    notesBox.alignment = { vertical: 'top', horizontal: 'left' };
+    notesBox.border = borderStyle;
+
+    // Bottom Notice
+    const bottomNotice1 = sheet.getRow(footerStart + 10);
+    bottomNotice1.getCell(1).value = 'Please Email This Form, Duly Signed To:';
+    bottomNotice1.getCell(1).font = { name: 'Arial', size: 8, italic: true };
+    sheet.mergeCells(`A${bottomNotice1.number}:F${bottomNotice1.number}`);
+
+    const bottomNotice2 = sheet.getRow(footerStart + 11);
+    bottomNotice2.getCell(1).value = 'Attn: The HR Departement';
+    bottomNotice2.getCell(1).font = { name: 'Arial', size: 8, italic: true, bold: true, underline: true };
+    sheet.mergeCells(`A${bottomNotice2.number}:F${bottomNotice2.number}`);
+
+    const bottomNotice3 = sheet.getRow(footerStart + 10); // Far right
+    bottomNotice3.getCell(21).value = '** Leave application must be faxed with the timesheet!';
+    bottomNotice3.getCell(21).font = { name: 'Arial', size: 8, italic: true };
+    sheet.mergeCells(`U${bottomNotice3.number}:AG${bottomNotice3.number}`);
+
     return await workbook.xlsx.writeBuffer();
 };
 
@@ -598,8 +745,8 @@ export const generateMandaysExcel = async (
         if (!groupedT[key]) groupedT[key] = [];
         groupedT[key].push(t);
     });
-    Object.values(groupedT).forEach(dailyTasks => {
-        if (!dailyTasks.some(t => (t.description || '').toLowerCase().includes('cuti') || (t.description || '').toLowerCase().includes('annual leave'))) {
+    Object.values(groupedT).forEach((dailyTasks: Task[]) => {
+        if (!dailyTasks.some((t: Task) => (t.description || '').toLowerCase().includes('cuti') || (t.description || '').toLowerCase().includes('annual leave'))) {
             totalMandaysFinal += 1;
         }
     });
