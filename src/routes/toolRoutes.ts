@@ -79,7 +79,10 @@ router.post('/generate-mandays', async (req: Request, res: Response): Promise<an
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=Mandays_${employee.name || 'Export'}.xlsx`);
         res.send(buffer);
-    } catch (error) { res.status(500).send('Error Generate Excel Mandays'); }
+    } catch (error) {
+        console.error('Error Generate Excel Mandays:', error);
+        res.status(500).send('Error Generate Excel Mandays');
+    }
 });
 
 // AI Enhancement
