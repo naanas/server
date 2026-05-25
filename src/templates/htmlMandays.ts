@@ -1,16 +1,32 @@
 import dayjs from 'dayjs';
-import { Task, OvertimeTask, getBase64Image, parseDateKey } from './htmlHelpers';
+import {
+  Task,
+  OvertimeTask,
+  getBase64Image,
+  parseDateKey,
+  isHolidayTask,
+  isLeaveTask,
+  enrichTasksWithApiHolidays,
+  resolveHolidayDates,
+} from './htmlHelpers';
 
-export const generateMandaysHtml = (employee: any, tasks: Task[], overtimeTasks: OvertimeTask[]) => {
-  const logoPegadaian = getBase64Image('logo-pegadaian.png'); 
-  const logoPoj = getBase64Image('logo-poj.png');             
+export const generateMandaysHtml = (
+  employee: any,
+  tasks: Task[],
+  overtimeTasks: OvertimeTask[],
+  customHolidays: string[] = []
+) => {
+  const logoPegadaian = getBase64Image('logo-pegadaian.png');
+  const logoPoj = getBase64Image('logo-poj.png');
 
-  // --- LOGIC DISPLAY NAME ---
-  const displayName = (employee.reportName && employee.reportName.trim() !== '') 
-                      ? employee.reportName 
-                      : employee.name;
+  const HOLIDAYS = resolveHolidayDates(customHolidays);
+  const allTasks = enrichTasksWithApiHolidays(employee, tasks, HOLIDAYS);
 
-  // Format Data Karyawan
+  const displayName =
+    employee.reportName && employee.reportName.trim() !== ''
+      ? employee.reportName
+      : employee.name;
+
   const signDate = employee.periodEnd ? dayjs(employee.periodEnd).format('DD/MM/YYYY') : '-';
   const clientSite = employee.clientSite || 'Divisi Pengembangan Aplikasi TI - PT Pegadaian';
   const workUnit = employee.workUnit || 'Dept. IT Business Analyst';
@@ -18,37 +34,44 @@ export const generateMandaysHtml = (employee: any, tasks: Task[], overtimeTasks:
   const supervisor = employee.supervisor || 'Lailatul Fitriana R';
   const squad = employee.squad || 'Squad IT PLATFORM';
   const employeeNo = employee.no || 'POJ42050260';
-  
+
   let periodDisplay = employee.month;
   if (!periodDisplay && employee.periodStart && employee.periodEnd) {
-      const startMonth = dayjs(employee.periodStart).format('MMMM').toUpperCase();
-      const endMonth = dayjs(employee.periodEnd).format('MMMM').toUpperCase();
-      periodDisplay = startMonth === endMonth ? startMonth : `${startMonth} TO ${endMonth}`;
+    const startMonth = dayjs(employee.periodStart).format('MMMM').toUpperCase();
+    const endMonth = dayjs(employee.periodEnd).format('MMMM').toUpperCase();
+    periodDisplay = startMonth === endMonth ? startMonth : `${startMonth} TO ${endMonth}`;
   } else if (!periodDisplay) {
-      periodDisplay = '-';
+    periodDisplay = '-';
   }
 
-  // LOGIC TABEL A
-  const groupedTasks: { [key: string]: { tasks: Task[], meta: any } } = {};
-  tasks.forEach((task) => {
+  const groupedTasks: Record<string, { tasks: Task[]; meta: { display: string; valid: boolean; timestamp: number } }> = {};
+  allTasks.forEach((task) => {
     const { key, display, valid, timestamp } = parseDateKey(task.date);
     if (!groupedTasks[key]) groupedTasks[key] = { tasks: [], meta: { display, valid, timestamp } };
     groupedTasks[key].tasks.push(task);
   });
-  
-  const sortedKeys = Object.keys(groupedTasks).sort((a, b) => groupedTasks[a].meta.timestamp - groupedTasks[b].meta.timestamp);
-  
+
+  const sortedKeys = Object.keys(groupedTasks).sort(
+    (a, b) => groupedTasks[a].meta.timestamp - groupedTasks[b].meta.timestamp
+  );
+
+  const isNonCountableDay = (dailyTasks: Task[], dateKey: string) => {
+    if (dailyTasks.some(isLeaveTask) || dailyTasks.some(isHolidayTask)) return true;
+    const hasWorkTask = dailyTasks.some((t) => !isHolidayTask(t) && !isLeaveTask(t));
+    if (HOLIDAYS.includes(dateKey) && !hasWorkTask) return true;
+    return false;
+  };
+
   let rowsHtml = '';
   let rowNumber = 1;
-  let totalMandays = 0; 
-  
+  let totalMandays = 0;
+
   sortedKeys.forEach((key) => {
     const group = groupedTasks[key];
     const dailyTasks = group.tasks;
-    const rowSpan = dailyTasks.length; 
-    
-    const isCuti = dailyTasks.some(t => (t.description || '').toLowerCase().includes('cuti'));
-    if (!isCuti) totalMandays += 1;
+    const rowSpan = dailyTasks.length;
+    const skipManday = isNonCountableDay(dailyTasks, key);
+    if (!skipManday) totalMandays += 1;
 
     dailyTasks.forEach((t, index) => {
       rowsHtml += `<tr>`;
@@ -58,12 +81,12 @@ export const generateMandaysHtml = (employee: any, tasks: Task[], overtimeTasks:
       }
       rowsHtml += `<td class="text-left" style="padding-left: 5px;">${t.description}</td>`;
       if (index === 0) {
-        const mandayValue = isCuti ? '' : '1';
+        const mandayValue = skipManday ? '' : '1';
         rowsHtml += `<td class="ctr" rowspan="${rowSpan}">${mandayValue}</td>`;
       }
       const ticketNum = t.ticketNumber || '';
-      const ticketDisplayA = t.ticketLink 
-        ? `<a href="${t.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">${ticketNum || 'Link'}</a>` 
+      const ticketDisplayA = t.ticketLink
+        ? `<a href="${t.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">${ticketNum || 'Link'}</a>`
         : ticketNum || '-';
 
       rowsHtml += `<td class="ctr px-1" style="font-size: 8px; word-break: break-all;">${ticketDisplayA}</td>`;
@@ -74,26 +97,25 @@ export const generateMandaysHtml = (employee: any, tasks: Task[], overtimeTasks:
 
   const totalHours = totalMandays * 8;
 
-  // LOGIC TABEL B
   let totalOtHours = 0;
-  const otDates = new Set();
+  const otDates = new Set<string>();
   let otRowsHtml = '';
   let otRowNumber = 1;
 
   if (!overtimeTasks || overtimeTasks.length === 0) {
-     otRowsHtml += `<tr style="height: 20px;"><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
-     otRowsHtml += `<tr style="height: 20px;"><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
+    otRowsHtml += `<tr style="height: 20px;"><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
+    otRowsHtml += `<tr style="height: 20px;"><td></td><td></td><td></td><td></td><td></td><td></td></tr>`;
   } else {
     overtimeTasks.sort((a, b) => parseDateKey(a.date).timestamp - parseDateKey(b.date).timestamp);
     overtimeTasks.forEach((ot) => {
-       const dur = parseFloat(String(ot.duration)) || 0;
-       totalOtHours += dur;
-       if(ot.date) otDates.add(ot.date);
-       const { display: dateDisplay } = parseDateKey(ot.date);
-       const ticketDisplayB = ot.ticketLink 
-          ? `<a href="${ot.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">Link</a>` 
-          : '-';
-       otRowsHtml += `<tr>
+      const dur = parseFloat(String(ot.duration)) || 0;
+      totalOtHours += dur;
+      if (ot.date) otDates.add(ot.date);
+      const { display: dateDisplay } = parseDateKey(ot.date);
+      const ticketDisplayB = ot.ticketLink
+        ? `<a href="${ot.ticketLink}" target="_blank" style="color:blue; text-decoration:none;">Link</a>`
+        : '-';
+      otRowsHtml += `<tr>
          <td class="ctr">${otRowNumber}</td>
          <td class="ctr">${dateDisplay}</td>
          <td class="text-left" style="padding-left: 5px;">${ot.description || ''}</td>
@@ -101,7 +123,7 @@ export const generateMandaysHtml = (employee: any, tasks: Task[], overtimeTasks:
          <td class="ctr px-1" style="font-size: 8px;">${ticketDisplayB}</td>
          <td class="ctr">${ot.remarks || ''}</td>
        </tr>`;
-       otRowNumber++;
+      otRowNumber++;
     });
   }
   const totalOtDays = otDates.size;
@@ -128,7 +150,6 @@ export const generateMandaysHtml = (employee: any, tasks: Task[], overtimeTasks:
         * { font-size: 9px; } 
         table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 5px; }
         
-        /* GENERAL TABLE BORDER: 0.1pt */
         th, td { border: 0.1pt solid black; padding: 3px 2px; vertical-align: middle; }
         th { background-color: #E0E0E0 !important; font-weight: bold; text-align: center; height: 25px; }
         
@@ -150,43 +171,29 @@ export const generateMandaysHtml = (employee: any, tasks: Task[], overtimeTasks:
         .sign-area { flex: 1; text-align: center; padding: 0 10px; }
         .certify-text { font-style: italic; font-size: 8px; border: none; padding: 3px 0; display: block; text-align: left; margin-bottom: 5px; }
 
-        /* --- STYLING BARU UNTUK TANDA TANGAN --- */
         .sign-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
-        
-        /* RESET BORDER DEFAULT UNTUK TABEL TANDA TANGAN */
         .sign-table td {
              border: none;
              padding: 0;
-             vertical-align: bottom; /* Agar konten kedorong ke bawah */
+             vertical-align: bottom;
         }
-
-        /* SEPARATOR VERTICAL (Garis tegak antar kolom) */
-        /* Pilih sel ke-2 (Supervisor) dan ke-3 (Dept Head) */
         .sign-table td + td {
             border-left: 0.5pt solid black;
         }
-
-        /* CONTAINER JUDUL (Atas) */
         .sign-title-box {
             text-align: center;
             font-weight: bold;
             padding: 5px;
-            /* Tidak ada border bawah disini */
         }
-
-        /* SPACER (Ruang Kosong buat Tanda Tangan) */
         .sign-spacer {
-            height: 40px; /* Atur tinggi ruang tanda tangan disini */
+            height: 40px;
         }
-
-        /* CONTAINER NAMA (Bawah) - GARIS DI SINI */
         .sign-name-box {
             text-align: center;
-            border-top: 0.5pt solid black; /* INI GARIS HORIZONTAL DI ATAS NAMA */
+            border-top: 0.5pt solid black;
             padding: 2px 0 5px 0;
-            margin: 0 5px; /* Sedikit jarak kiri kanan biar garis gak nempel banget sama garis vertikal */
+            margin: 0 5px;
         }
-
         .sign-name { text-decoration: underline; font-weight: bold; text-transform: uppercase; }
         .sign-date { font-weight: normal; margin-top: 2px; font-size: 8px; }
         

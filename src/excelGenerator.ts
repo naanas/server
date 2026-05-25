@@ -268,7 +268,7 @@ export const generateTimesheetExcel = async (
   totalRecap.getCell(1).fill = fillWeekend;
   
   totalRecap.getCell(3).value = stats.wh + stats.ot;
-  totalRecap.getCell(4).value = stats.totalDays + stats.al + stats.s + stats.h + stats.u + stats.c;
+  totalRecap.getCell(4).value = stats.totalDays;
   [1,3,4].forEach(c => { const cell = totalRecap.getCell(c); cell.border = borderStyle; cell.alignment = centerStyle; });
 
   const signRowIdx = 20; 
@@ -306,7 +306,8 @@ export const generateTimesheetExcel = async (
 export const generateMandaysExcel = async (
     employee: any, 
     tasks: Task[], 
-    overtimeTasks: OvertimeTask[]
+    overtimeTasks: OvertimeTask[],
+    _holidays: string[] = []
 ) => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Mandays Report');

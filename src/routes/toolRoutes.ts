@@ -24,9 +24,14 @@ router.post('/preview-html', async (req: Request, res: Response): Promise<any> =
         }
 
         let holidays: string[] = [];
-        if (type === 'timesheet') {
-            const targetYear = employee.periodEnd ? new Date(employee.periodEnd).getFullYear() : new Date().getFullYear();
-            holidays = await getIndonesianHolidays(targetYear);
+        if (type === 'timesheet' || type === 'mandays') {
+            const endYear = employee.periodEnd ? new Date(employee.periodEnd).getFullYear() : new Date().getFullYear();
+            const startYear = employee.periodStart
+                ? new Date(employee.periodStart).getFullYear()
+                : endYear;
+            const years = new Set([startYear, endYear]);
+            const lists = await Promise.all([...years].map((y) => getIndonesianHolidays(y)));
+            holidays = [...new Set(lists.flat())];
         }
 
         const htmlString = generatePreview(type || 'mandays', employee, combinedRegularTasks, overtimeTasks || [], holidays);
@@ -75,7 +80,14 @@ router.post('/generate-mandays', async (req: Request, res: Response): Promise<an
                 combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
             } catch (err) { console.warn("DB Fetch Error Excel Mandays:", err); }
         }
-        const buffer = await generateMandaysExcel(employee, combinedRegularTasks, overtimeTasks);
+        const endYear = employee.periodEnd ? new Date(employee.periodEnd).getFullYear() : new Date().getFullYear();
+        const startYear = employee.periodStart
+            ? new Date(employee.periodStart).getFullYear()
+            : endYear;
+        const years = new Set([startYear, endYear]);
+        const lists = await Promise.all([...years].map((y) => getIndonesianHolidays(y)));
+        const holidays = [...new Set(lists.flat())];
+        const buffer = await generateMandaysExcel(employee, combinedRegularTasks, overtimeTasks, holidays);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=Mandays_${employee.name || 'Export'}.xlsx`);
         res.send(buffer);
