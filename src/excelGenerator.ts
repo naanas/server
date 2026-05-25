@@ -1,6 +1,13 @@
 import ExcelJS from 'exceljs';
 import dayjs from 'dayjs';
-import { Task, OvertimeTask, parseDateKey } from './templates/htmlHelpers';
+import {
+    Task,
+    OvertimeTask,
+    parseDateKey,
+    enrichTasksWithApiHolidays,
+    resolveHolidayDates,
+    isNonCountableMandayDay,
+} from './templates/htmlHelpers';
 
 // --- STYLING HELPERS ---
 const borderStyle: Partial<ExcelJS.Borders> = {
@@ -476,8 +483,11 @@ export const generateMandaysExcel = async (
     employee: any,
     tasks: Task[],
     overtimeTasks: OvertimeTask[],
-    _holidays: string[] = []
+    customHolidays: string[] = []
 ) => {
+    const HOLIDAYS = resolveHolidayDates(customHolidays);
+    const allTasks = enrichTasksWithApiHolidays(employee, tasks, HOLIDAYS);
+
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Mandays Report', {
         pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1 }
@@ -502,13 +512,17 @@ export const generateMandaysExcel = async (
         periodDisplay = '-';
     }
 
-    const displayName = (employee.reportName || employee.name || '').toUpperCase();
+    const displayName =
+        employee.reportName && String(employee.reportName).trim() !== ''
+            ? String(employee.reportName).toUpperCase()
+            : (employee.name || '').toUpperCase();
     const clientSite = employee.clientSite || 'Divisi Pengembangan Aplikasi TI - PT Pegadaian';
-    const workUnit = employee.workUnit || '';
-    const deptHead = employee.deptHead || '';
-    const supervisor = employee.supervisor || '';
-    const squad = employee.squad || '';
-    const employeeNo = employee.no || '';
+    const workUnit = employee.workUnit || 'Dept. IT Business Analyst';
+    const deptHead = employee.deptHead || 'Andhar Setiawan';
+    const supervisor = employee.supervisor || 'Lailatul Fitriana R';
+    const squad = employee.squad || 'Squad IT PLATFORM';
+    const employeeNo = employee.no || 'POJ42050260';
+    const signDate = employee.periodEnd ? dayjs(employee.periodEnd).format('DD/MM/YYYY') : '-';
 
     // Header + title
     sheet.mergeCells('A2:D2');
@@ -601,7 +615,7 @@ export const generateMandaysExcel = async (
     });
 
     const groupedTasks: { [key: string]: { tasks: Task[], meta: any } } = {};
-    tasks.forEach((task) => {
+    allTasks.forEach((task) => {
         const { key, display, timestamp } = parseDateKey(task.date);
         if (!groupedTasks[key]) groupedTasks[key] = { tasks: [], meta: { display, timestamp } };
         groupedTasks[key].tasks.push(task);
@@ -614,8 +628,8 @@ export const generateMandaysExcel = async (
         const group = groupedTasks[key];
         const dailyTasks = group.tasks;
         const rowSpan = dailyTasks.length;
-        const isLeave = dailyTasks.some(t => (t.description || '').toLowerCase().includes('cuti') || (t.description || '').toLowerCase().includes('annual leave'));
-        if (!isLeave) totalMandays += 1;
+        const skipManday = isNonCountableMandayDay(dailyTasks, key, HOLIDAYS);
+        if (!skipManday) totalMandays += 1;
 
         const startRow = currentRow;
         dailyTasks.forEach((t, index) => {
@@ -624,7 +638,7 @@ export const generateMandaysExcel = async (
             if (index === 0) {
                 row.getCell(1).value = rowNumber;
                 row.getCell(2).value = group.meta.display;
-                row.getCell(10).value = isLeave ? '' : 1;
+                row.getCell(10).value = skipManday ? '' : 1;
             }
             row.getCell(4).value = t.description || '';
             const jiraCell = row.getCell(11);
@@ -654,7 +668,7 @@ export const generateMandaysExcel = async (
     });
 
     const totalRegularRow = sheet.getRow(currentRow++);
-    totalRegularRow.getCell(4).value = 'TotalMandays Reguler';
+    totalRegularRow.getCell(4).value = 'Total Mandays Reguler';
     totalRegularRow.getCell(10).value = totalMandays;
     totalRegularRow.getCell(4).alignment = { horizontal: 'right', vertical: 'middle' };
     totalRegularRow.getCell(10).alignment = centerStyle;
@@ -669,7 +683,8 @@ export const generateMandaysExcel = async (
 
     // Overtime table
     const overtimeTitleRow = sheet.getRow(currentRow++);
-    overtimeTitleRow.getCell(1).value = 'Overtime';
+    sheet.mergeCells(`A${overtimeTitleRow.number}:D${overtimeTitleRow.number}`);
+    overtimeTitleRow.getCell(1).value = 'B. Overtime';
     overtimeTitleRow.getCell(1).font = { bold: true, size: 9 };
 
     const overtimeHeaderRow = sheet.getRow(currentRow++);
@@ -693,14 +708,27 @@ export const generateMandaysExcel = async (
 
     let totalOtHours = 0;
     const otDates = new Set<string>();
-    const sortedOt = [...overtimeTasks].sort((a, b) => parseDateKey(a.date).timestamp - parseDateKey(b.date).timestamp);
+    const sortedOt = [...(overtimeTasks || [])].sort((a, b) => parseDateKey(a.date).timestamp - parseDateKey(b.date).timestamp);
+
+    if (sortedOt.length === 0) {
+        for (let i = 0; i < 2; i++) {
+            const blankRow = sheet.getRow(currentRow++);
+            blankRow.height = 16;
+            setBorder(blankRow.number, 1, 14);
+            sheet.mergeCells(blankRow.number, 2, blankRow.number, 3);
+            sheet.mergeCells(blankRow.number, 4, blankRow.number, 9);
+            sheet.mergeCells(blankRow.number, 11, blankRow.number, 12);
+            sheet.mergeCells(blankRow.number, 13, blankRow.number, 14);
+        }
+    }
+
     sortedOt.forEach((ot, i) => {
         const row = sheet.getRow(currentRow++);
         row.height = 16;
         const { display } = parseDateKey(ot.date);
         const dur = parseFloat(String(ot.duration)) || 0;
         totalOtHours += dur;
-        if (ot.date) otDates.add(parseDateKey(ot.date).key);
+        if (ot.date) otDates.add(ot.date);
 
         row.getCell(1).value = i + 1;
         row.getCell(2).value = display;
@@ -726,7 +754,7 @@ export const generateMandaysExcel = async (
 
     const totalOtDays = otDates.size;
     const otTotalHoursRow = sheet.getRow(currentRow++);
-    otTotalHoursRow.getCell(4).value = 'TotalHours Overtime';
+    otTotalHoursRow.getCell(4).value = 'Total Hours Overtime';
     otTotalHoursRow.getCell(10).value = totalOtHours;
     otTotalHoursRow.getCell(4).font = boldFont;
     otTotalHoursRow.getCell(10).font = boldFont;
@@ -738,7 +766,7 @@ export const generateMandaysExcel = async (
     sheet.mergeCells(otTotalHoursRow.number, 11, otTotalHoursRow.number, 14);
 
     const otTotalDaysRow = sheet.getRow(currentRow++);
-    otTotalDaysRow.getCell(4).value = 'TotalDays Overtime';
+    otTotalDaysRow.getCell(4).value = 'Total Days Overtime';
     otTotalDaysRow.getCell(10).value = totalOtDays;
     otTotalDaysRow.getCell(4).font = boldFont;
     otTotalDaysRow.getCell(10).font = boldFont;
@@ -780,8 +808,8 @@ export const generateMandaysExcel = async (
         });
     };
 
-    addRecap(1, 'REG', '- Work Hours', totalHoursFinal, totalMandays);
-    addRecap(2, 'OT', '- Over Time', totalOtHours, totalOtDays);
+    addRecap(1, 'REG', 'Work Hours', totalHoursFinal, totalMandays);
+    addRecap(2, 'OT', 'Over Time', totalOtHours, totalOtDays);
     addRecap(3, 'TOTAL', '', totalHoursFinal + totalOtHours, totalMandays + totalOtDays);
     sheet.mergeCells(`A${recapStart + 3}:B${recapStart + 3}`);
     sheet.getCell(`A${recapStart + 3}`).alignment = { horizontal: 'left', vertical: 'middle' };
@@ -820,7 +848,7 @@ export const generateMandaysExcel = async (
         nameCell.font = { name: 'Arial', bold: true, size: 9 };
         nameCell.alignment = centerStyle;
         const dateCell = sheet.getCell(`${n.from}${dateRow}`);
-        dateCell.value = `Date: ${employee.periodEnd ? dayjs(employee.periodEnd).format('DD/MM/YYYY') : '-'}`;
+        dateCell.value = `Date: ${signDate}`;
         dateCell.font = { name: 'Arial', size: 8 };
         dateCell.alignment = centerStyle;
     });

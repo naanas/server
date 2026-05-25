@@ -144,3 +144,15 @@ export const enrichTasksWithApiHolidays = (
 
   return extra.length > 0 ? [...tasks, ...extra] : tasks;
 };
+
+/** Hari yang tidak dihitung mandays (cuti, libur, libur nasional tanpa kerja). */
+export const isNonCountableMandayDay = (
+  dailyTasks: Task[],
+  dateKey: string,
+  holidays: string[]
+): boolean => {
+  if (dailyTasks.some(isLeaveTask) || dailyTasks.some(isHolidayTask)) return true;
+  const hasWorkTask = dailyTasks.some((t) => !isHolidayTask(t) && !isLeaveTask(t));
+  if (holidays.includes(dateKey) && !hasWorkTask) return true;
+  return false;
+};

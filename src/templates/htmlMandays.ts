@@ -4,10 +4,9 @@ import {
   OvertimeTask,
   getBase64Image,
   parseDateKey,
-  isHolidayTask,
-  isLeaveTask,
   enrichTasksWithApiHolidays,
   resolveHolidayDates,
+  isNonCountableMandayDay,
 } from './htmlHelpers';
 
 export const generateMandaysHtml = (
@@ -55,13 +54,6 @@ export const generateMandaysHtml = (
     (a, b) => groupedTasks[a].meta.timestamp - groupedTasks[b].meta.timestamp
   );
 
-  const isNonCountableDay = (dailyTasks: Task[], dateKey: string) => {
-    if (dailyTasks.some(isLeaveTask) || dailyTasks.some(isHolidayTask)) return true;
-    const hasWorkTask = dailyTasks.some((t) => !isHolidayTask(t) && !isLeaveTask(t));
-    if (HOLIDAYS.includes(dateKey) && !hasWorkTask) return true;
-    return false;
-  };
-
   let rowsHtml = '';
   let rowNumber = 1;
   let totalMandays = 0;
@@ -70,7 +62,7 @@ export const generateMandaysHtml = (
     const group = groupedTasks[key];
     const dailyTasks = group.tasks;
     const rowSpan = dailyTasks.length;
-    const skipManday = isNonCountableDay(dailyTasks, key);
+    const skipManday = isNonCountableMandayDay(dailyTasks, key, HOLIDAYS);
     if (!skipManday) totalMandays += 1;
 
     dailyTasks.forEach((t, index) => {
