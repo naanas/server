@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import { supabase } from '../dbconfig/supabase';
 import { createInvoice } from '../services/paymentService';
-import { fulfillPaidTransaction } from '../services/paymentFulfillService';
+import { fulfillPaidTransaction, verifyXenditPaid } from '../services/paymentFulfillService';
 
 const router = express.Router();
 
@@ -117,24 +117,57 @@ router.post('/fulfill', async (req: Request, res: Response): Promise<any> => {
 router.post('/check-status', async (req: Request, res: Response): Promise<any> => {
     try {
         const { external_id } = req.body;
-        const { data: trx } = await supabase
+        if (!external_id) {
+            return res.status(400).json({ error: 'external_id wajib diisi' });
+        }
+
+        const { data: trx, error } = await supabase
             .from('transactions')
             .select('*')
             .eq('external_id', external_id)
             .single();
-        if (!trx) return res.status(404).json({ error: 'Transaksi tidak ditemukan' });
 
-        if (!trx.payload?.emailSentAt) {
-            const result = await fulfillPaidTransaction(external_id);
-            if (result.ok) {
-                return res.json({ status: 'PAID', message: result.message });
+        if (error || !trx) {
+            return res.status(404).json({ error: 'Transaksi tidak ditemukan' });
+        }
+
+        if (trx.payload?.emailSentAt) {
+            return res.json({ status: 'PAID', message: 'PDF sudah dikirim ke email' });
+        }
+
+        let isPaid = isPaidStatus(trx.status);
+        if (!isPaid) {
+            try {
+                isPaid = await verifyXenditPaid(external_id);
+            } catch (e: any) {
+                console.error('Xendit verify error:', e);
+                return res.status(502).json({
+                    error: 'Gagal verifikasi ke Xendit. Pastikan XENDIT_SECRET_KEY sudah diset di server.',
+                });
             }
         }
 
-        res.json({ status: trx.status });
-    } catch (e) {
-        res.status(500).json({ error: 'Gagal cek status' });
+        if (!isPaid) {
+            return res.json({ status: 'PENDING' });
+        }
+
+        const result = await fulfillPaidTransaction(external_id);
+        if (result.ok || result.alreadyDone) {
+            return res.json({ status: 'PAID', message: result.message });
+        }
+
+        return res.status(500).json({
+            status: 'PAID',
+            error: result.message,
+        });
+    } catch (e: any) {
+        console.error('check-status error:', e);
+        res.status(500).json({ error: e.message || 'Gagal cek status' });
     }
 });
+
+function isPaidStatus(status: string | undefined) {
+    return String(status || '').toUpperCase() === 'PAID';
+}
 
 export default router;
