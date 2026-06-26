@@ -1,11 +1,7 @@
 import express, { Request, Response } from 'express';
 import { supabase } from '../dbconfig/supabase';
 import { createInvoice } from '../services/paymentService';
-import { generatePdfBuffer } from '../services/pdfService';
-import { sendEmailWithPdf } from '../services/emailService';
-import { getTasksFromDB } from '../services/dbService';
-import { getIndonesianHolidays } from '../services/holidayService';
-import { generatePreview } from '../htmlGenerator';
+import { fulfillPaidTransaction } from '../services/paymentFulfillService';
 
 const router = express.Router();
 
@@ -79,63 +75,66 @@ router.post('/create', async (req: Request, res: Response): Promise<any> => {
 // 2. Webhook Xendit
 router.post('/webhook', async (req: Request, res: Response): Promise<any> => {
     try {
-        const { external_id, status } = req.body;
+        const external_id = req.body.external_id || req.body.externalId;
+        const status = String(req.body.status || '').toUpperCase();
         console.log(`🔔 Webhook masuk: ${external_id} status ${status}`);
 
-        if (status === 'PAID') {
-            const { data: trx, error } = await supabase
-                .from('transactions')
-                .select('*')
-                .eq('external_id', external_id)
-                .single();
-
-            if (error || !trx) return res.status(404).send('Transaction Not Found');
-            if (trx.status === 'PAID') return res.status(200).json({ message: 'Already processed' });
-
-            await supabase.from('transactions')
-                .update({ status: 'PAID', updated_at: new Date() })
-                .eq('id', trx.id);
-
-            const { employee, tasks: savedTasks, overtimeTasks } = trx.payload;
-            const type = trx.type;
-
-            let combinedRegularTasks = [...(savedTasks || [])];
-            if (employee.name) {
-                try {
-                    const dbTasks = await getTasksFromDB(employee.name, employee.periodStart, employee.periodEnd);
-                    const mappedTasks = dbTasks.map((t: any) => ({
-                        date: t.date, description: t.description, ticketNumber: t.ticket_number, ticketLink: t.ticket_link
-                    }));
-                    combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
-                } catch (err) { console.warn("Webhook DB Fetch Error:", err); }
+        if (status === 'PAID' && external_id) {
+            const result = await fulfillPaidTransaction(external_id);
+            if (!result.ok && !result.alreadyDone) {
+                console.error('Webhook fulfill gagal:', result.message);
+                return res.status(500).send(result.message);
             }
-
-            const year = new Date(employee.periodEnd).getFullYear();
-            const holidays = await getIndonesianHolidays(year);
-
-            const htmlContent = generatePreview(type, employee, combinedRegularTasks, overtimeTasks, holidays);
-            const pdfBuffer = await generatePdfBuffer(htmlContent);
-
-            const filename = `${type.toUpperCase()}_${employee.name || 'Report'}.pdf`;
-            await sendEmailWithPdf(trx.customer_email, `Download ${filename}`, pdfBuffer, filename);
-
-            console.log(`✅ Sukses kirim PDF ke ${trx.customer_email}`);
         }
 
         res.status(200).json({ message: 'Webhook received' });
     } catch (error) {
-        console.error("Webhook Failed:", error);
+        console.error('Webhook Failed:', error);
         res.status(500).send('Webhook Processing Error');
+    }
+});
+
+// 3. Fallback: proses PDF + email setelah redirect sukses (jika webhook Xendit telat/gagal)
+router.post('/fulfill', async (req: Request, res: Response): Promise<any> => {
+    try {
+        const { external_id } = req.body;
+        if (!external_id) {
+            return res.status(400).json({ error: 'external_id wajib diisi' });
+        }
+
+        const result = await fulfillPaidTransaction(external_id);
+        if (!result.ok) {
+            return res.status(400).json({ error: result.message });
+        }
+
+        res.json(result);
+    } catch (error: any) {
+        console.error('Fulfill error:', error);
+        res.status(500).json({ error: error.message || 'Gagal memproses PDF' });
     }
 });
 
 router.post('/check-status', async (req: Request, res: Response): Promise<any> => {
     try {
         const { external_id } = req.body;
-        const { data: trx } = await supabase.from('transactions').select('*').eq('external_id', external_id).single();
-        if (!trx) return res.status(404).json({ error: "Transaksi tidak ditemukan" });
+        const { data: trx } = await supabase
+            .from('transactions')
+            .select('*')
+            .eq('external_id', external_id)
+            .single();
+        if (!trx) return res.status(404).json({ error: 'Transaksi tidak ditemukan' });
+
+        if (!trx.payload?.emailSentAt) {
+            const result = await fulfillPaidTransaction(external_id);
+            if (result.ok) {
+                return res.json({ status: 'PAID', message: result.message });
+            }
+        }
+
         res.json({ status: trx.status });
-    } catch (e) { res.status(500).json({ error: "Gagal cek status" }); }
+    } catch (e) {
+        res.status(500).json({ error: 'Gagal cek status' });
+    }
 });
 
 export default router;
