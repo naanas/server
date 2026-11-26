@@ -1,11 +1,18 @@
 import express, { Request, Response } from 'express';
 import { generatePreview } from '../htmlGenerator';
-import { generateTimesheetExcel, generateMandaysExcel } from '../excelGenerator';
+import { generateTimesheetExcel, generateMandaysExcel, buildReportFilename } from '../excelGenerator';
 import { generateProfessionalDescription } from '../services/aiService';
 import { getTasksFromDB } from '../services/dbService';
 import { getIndonesianHolidays } from '../services/holidayService';
 
 const router = express.Router();
+
+const sendXlsx = (res: Response, buffer: ArrayBuffer | Buffer, filename: string) => {
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.send(Buffer.from(buffer as ArrayBuffer));
+};
 
 // HTML Preview
 router.post('/preview-html', async (req: Request, res: Response): Promise<any> => {
@@ -57,14 +64,17 @@ router.post('/generate-timesheet', async (req: Request, res: Response): Promise<
                 combinedRegularTasks = [...mappedTasks, ...combinedRegularTasks];
             } catch (err) { console.warn("DB Fetch Error Excel:", err); }
         }
-        const year = employee.periodEnd ? new Date(employee.periodEnd).getFullYear() : new Date().getFullYear();
-        const holidays = await getIndonesianHolidays(year);
-        const buffer = await generateTimesheetExcel(employee, combinedRegularTasks, overtimeTasks, holidays);
+        const endYear = employee.periodEnd ? new Date(employee.periodEnd).getFullYear() : new Date().getFullYear();
+        const startYear = employee.periodStart ? new Date(employee.periodStart).getFullYear() : endYear;
+        const lists = await Promise.all([...new Set([startYear, endYear])].map((y) => getIndonesianHolidays(y)));
+        const holidays = [...new Set(lists.flat())];
+        const buffer = await generateTimesheetExcel(employee, combinedRegularTasks, overtimeTasks || [], holidays);
 
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename=Timesheet_${employee.name || 'Export'}.xlsx`);
-        res.send(buffer);
-    } catch (error) { res.status(500).send('Error Generate Excel'); }
+        sendXlsx(res, buffer, buildReportFilename(employee, '_TIMESHEET'));
+    } catch (error) {
+        console.error('Error Generate Excel Timesheet:', error);
+        res.status(500).send('Error Generate Excel');
+    }
 });
 
 router.post('/generate-mandays', async (req: Request, res: Response): Promise<any> => {
@@ -87,10 +97,8 @@ router.post('/generate-mandays', async (req: Request, res: Response): Promise<an
         const years = new Set([startYear, endYear]);
         const lists = await Promise.all([...years].map((y) => getIndonesianHolidays(y)));
         const holidays = [...new Set(lists.flat())];
-        const buffer = await generateMandaysExcel(employee, combinedRegularTasks, overtimeTasks, holidays);
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', `attachment; filename=Mandays_${employee.name || 'Export'}.xlsx`);
-        res.send(buffer);
+        const buffer = await generateMandaysExcel(employee, combinedRegularTasks, overtimeTasks || [], holidays);
+        sendXlsx(res, buffer, buildReportFilename(employee, '_MANDAYS'));
     } catch (error) {
         console.error('Error Generate Excel Mandays:', error);
         res.status(500).send('Error Generate Excel Mandays');
