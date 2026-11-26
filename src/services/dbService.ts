@@ -79,19 +79,25 @@ export const getReportersFromDB = async () => {
 // 2. GET TASKS (Dari DB)
 // ==========================================
 export const getTasksFromDB = async (reporterName: string, startDate?: string, endDate?: string) => {
-    // Ambil data berdasarkan reporter
-    // Karena kita filter by kolom, biasanya hasilnya tidak akan lebih dari 1000 (kecuali 1 orang ngerjain 1000 tiket)
-    // Tapi untuk aman, kita set limit tinggi
-    
-    const { data, error } = await supabase
-        .from('tasks')
-        .select('*')
-        .ilike('reporter', reporterName) // Case insensitive
-        .limit(2000); // Ambil maks 2000 task per orang (cukup untuk 1 bulan)
+    // Ambil semua task reporter secara bertahap: Supabase/PostgREST membatasi
+    // tiap response maks 1000 baris (limit() lebih besar tetap terpotong),
+    // jadi reporter dengan >1000 task kehilangan task terbaru kalau tidak dipaginasi.
+    const pageSize = 1000;
+    const data: any[] = [];
+    for (let page = 0; ; page++) {
+        const { data: rows, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .ilike('reporter', reporterName) // Case insensitive
+            .order('id', { ascending: true })
+            .range(page * pageSize, (page + 1) * pageSize - 1);
 
-    if (error || !data) {
-        console.error("DB Error fetch tasks:", error);
-        return [];
+        if (error || !rows) {
+            console.error("DB Error fetch tasks:", error);
+            return [];
+        }
+        data.push(...rows);
+        if (rows.length < pageSize) break;
     }
 
     // Filter Tanggal di JS
