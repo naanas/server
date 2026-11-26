@@ -1,179 +1,316 @@
 import axios, { AxiosInstance } from 'axios';
+import dayjs from 'dayjs';
+import { getJiraConfig, isJiraConfigured } from '../config/jira';
 
-const jiraSite = () => process.env.JIRA_SITE || 'https://pegadaian.atlassian.net';
-const browseBase = () =>
-    (process.env.JIRA_BASE_URL || `${jiraSite()}/browse/`).replace(/\/?$/, '/');
+/** Atlassian Document Format — plain text paragraph */
+export const textToAdf = (text: string) => ({
+    type: 'doc',
+    version: 1,
+    content: [
+        {
+            type: 'paragraph',
+            content: [{ type: 'text', text: text || ' ' }],
+        },
+    ],
+});
+
+let client: AxiosInstance | null = null;
+
+const getClient = (): AxiosInstance => {
+    if (!isJiraConfigured()) {
+        throw new Error('Jira belum dikonfigurasi. Isi JIRA_SITE, JIRA_EMAIL, JIRA_API_TOKEN di .env');
+    }
+    if (!client) {
+        const { site, email, token } = getJiraConfig();
+        const auth = Buffer.from(`${email}:${token}`).toString('base64');
+        client = axios.create({
+            baseURL: `${site}/rest/api/3`,
+            headers: {
+                Authorization: `Basic ${auth}`,
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+            },
+            timeout: 30000,
+        });
+    }
+    return client;
+};
+
+export const testJiraConnection = async () => {
+    const api = getClient();
+    const { data } = await api.get('/myself');
+    return {
+        ok: true,
+        accountId: data.accountId,
+        displayName: data.displayName,
+        emailAddress: data.emailAddress,
+    };
+};
+
+export const getCreateMeta = async (projectKey?: string) => {
+    const api = getClient();
+    const key = projectKey || getJiraConfig().projectKey;
+    const { data } = await api.get('/issue/createmeta', {
+        params: {
+            projectKeys: key,
+            expand: 'projects.issuetypes.fields',
+        },
+    });
+    return data;
+};
+
+/** Cari field createmeta by nama (case-insensitive, partial match) */
+export const findFieldsByLabel = (
+    createMeta: any,
+    labels: string[],
+    projectKey?: string
+): Record<string, { fieldId: string; name: string; schema?: any; allowedValues?: any[] }> => {
+    const key = projectKey || getJiraConfig().projectKey;
+    const project = createMeta?.projects?.find((p: any) => p.key === key);
+    const issueType = project?.issuetypes?.find(
+        (it: any) => it.name?.toLowerCase() === getJiraConfig().issueType.toLowerCase()
+    );
+    const fields = issueType?.fields || {};
+    const result: Record<string, { fieldId: string; name: string; schema?: any; allowedValues?: any[] }> = {};
+
+    for (const label of labels) {
+        const lower = label.toLowerCase();
+        for (const [fieldId, meta] of Object.entries(fields) as [string, any][]) {
+            const name = (meta.name || '').toLowerCase();
+            if (name.includes(lower) || lower.includes(name)) {
+                result[label] = {
+                    fieldId,
+                    name: meta.name,
+                    schema: meta.schema,
+                    allowedValues: meta.allowedValues,
+                };
+                break;
+            }
+        }
+    }
+    return result;
+};
+
+export interface CreateBatbIssueInput {
+    summary: string;
+    description: string;
+    taskBAValue: string;
+    startDate: string; // YYYY-MM-DD
+    durationMinutes: number;
+    teamValue?: string;
+    priorityName?: string;
+}
+
+export const createBatbIssue = async (input: CreateBatbIssueInput) => {
+    const cfg = getJiraConfig();
+    const cf = cfg.customFields;
+
+    if (!cf.taskBA || !cf.startDate || !cf.durationMinutes) {
+        throw new Error(
+            'Custom field Jira belum lengkap. Jalankan: npm run jira:discover lalu isi JIRA_CF_* di .env'
+        );
+    }
+
+    const fields: Record<string, unknown> = {
+        project: { key: cfg.projectKey },
+        issuetype: { name: cfg.issueType },
+        summary: input.summary,
+        description: textToAdf(input.description),
+        priority: { name: input.priorityName || 'Low' },
+        [cf.taskBA]: { value: input.taskBAValue },
+        [cf.startDate]: input.startDate,
+        [cf.durationMinutes]: input.durationMinutes,
+    };
+
+    if (cf.team && input.teamValue) {
+        fields[cf.team] = input.teamValue;
+    }
+
+    const api = getClient();
+    const { data } = await api.post('/issue', { fields });
+    return {
+        key: data.key as string,
+        id: data.id as string,
+        self: data.self as string,
+        link: `${cfg.browseBase}/${data.key}`,
+    };
+};
+
+const mapJiraStatusName = (name: string): 'backlog' | 'in_progress' | 'done' | 'cancel' => {
+    const n = name.toLowerCase();
+    if (n.includes('progress')) return 'in_progress';
+    if (n.includes('done')) return 'done';
+    if (n.includes('cancel')) return 'cancel';
+    return 'backlog';
+};
+
+/** Ambil ringkasan issue dari Jira (untuk /link, /task tanpa DB) */
+export const getJiraIssue = async (issueKey: string) => {
+    const cfg = getJiraConfig();
+    const api = getClient();
+    const fields = [
+        'summary',
+        'status',
+        'assignee',
+        'reporter',
+        cfg.customFields.startDate,
+        cfg.customFields.durationMinutes,
+    ].filter(Boolean);
+
+    const { data } = await api.get(`/issue/${issueKey}`, {
+        params: { fields: fields.join(',') },
+    });
+
+    const f = data.fields || {};
+    const startCf = cfg.customFields.startDate;
+    const durCf = cfg.customFields.durationMinutes;
+
+    return {
+        key: data.key as string,
+        summary: f.summary as string,
+        statusName: f.status?.name as string,
+        botStatus: mapJiraStatusName(f.status?.name || 'Backlog'),
+        startDate: startCf ? (f[startCf] as string | null) : null,
+        durationMinutes: durCf ? (f[durCf] as number | null) : null,
+        link: `${cfg.browseBase}/${data.key}`,
+    };
+};
 
 export type JiraTransition = {
     id: string;
     name: string;
-    to?: { name?: string };
+    to: { name: string; id?: string };
+    fields?: Record<string, { name?: string; required?: boolean; schema?: { type?: string } }>;
 };
 
-const client = (): AxiosInstance => {
-    const email = process.env.JIRA_EMAIL;
-    const token = process.env.JIRA_API_TOKEN;
-    if (!email || !token) {
-        throw new Error('JIRA_EMAIL dan JIRA_API_TOKEN wajib di .env');
+export const getIssueTransitions = async (issueKey: string, expandFields = false) => {
+    const api = getClient();
+    const { data } = await api.get(`/issue/${issueKey}/transitions`, {
+        params: expandFields ? { expand: 'transitions.fields' } : undefined,
+    });
+    return data.transitions as JiraTransition[];
+};
+
+const todayIsoDate = () => dayjs().format('YYYY-MM-DD');
+
+/** Field tambahan saat transisi (mis. End Date wajib saat Done) */
+const buildTransitionFields = (
+    target: 'toInProgress' | 'toDone' | 'toCancel',
+    transition?: JiraTransition
+): Record<string, unknown> => {
+    const cfg = getJiraConfig();
+    const fields: Record<string, unknown> = {};
+
+    if (target === 'toDone' && cfg.customFields.endDate) {
+        fields[cfg.customFields.endDate] = todayIsoDate();
     }
-    return axios.create({
-        baseURL: `${jiraSite()}/rest/api/3`,
-        auth: { username: email, password: token },
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    });
+
+    if (transition?.fields) {
+        for (const [fieldId, meta] of Object.entries(transition.fields)) {
+            if (!meta.required || fields[fieldId] !== undefined) continue;
+            const schemaType = meta.schema?.type || '';
+            if (schemaType === 'date') {
+                fields[fieldId] = todayIsoDate();
+            }
+        }
+    }
+
+    return fields;
 };
 
-const adfParagraph = (text: string) => ({
-    type: 'doc',
-    version: 1,
-    content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
-});
-
-export const issueBrowseUrl = (key: string) => `${browseBase()}${key}`;
-
-export const parseIssueKey = (text: string): string | null => {
-    const match = text.trim().toUpperCase().match(/\b([A-Z][A-Z0-9]+-\d+)\b/);
-    return match ? match[1] : null;
-};
-
-export const getIssue = async (issueKey: string) => {
-    const { data } = await client().get(`/issue/${issueKey}`, {
-        params: { fields: 'summary,status' },
-    });
-    return {
-        key: data.key as string,
-        summary: data.fields?.summary as string,
-        status: data.fields?.status?.name as string,
+const pickTransition = (transitions: JiraTransition[], target: 'toInProgress' | 'toDone' | 'toCancel') => {
+    const match = (t: JiraTransition) => {
+        const to = t.to.name.toLowerCase();
+        if (target === 'toInProgress') return to.includes('progress');
+        if (target === 'toDone') return to.includes('done');
+        return to.includes('cancel');
     };
+    return transitions.find(match);
 };
 
-export const getTransitions = async (issueKey: string): Promise<JiraTransition[]> => {
-    const { data } = await client().get(`/issue/${issueKey}/transitions`);
-    return data.transitions || [];
-};
-
-/** Cocokkan transition ke status target (Backlog / In Progress / Done / Cancel) */
-export const findTransitionForStatus = (
-    transitions: JiraTransition[],
-    target: 'in progress' | 'done' | 'cancel'
-): JiraTransition | undefined => {
-    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
-
-    const rules: Record<typeof target, { to: string[]; names: string[] }> = {
-        'in progress': {
-            to: ['in progress'],
-            names: ['progress', 'start', 'in progress'],
-        },
-        done: {
-            to: ['done'],
-            names: ['done', 'complete', 'resolve', 'finish', 'closed'],
-        },
-        cancel: {
-            to: ['cancel', 'cancelled', 'canceled'],
-            names: ['cancel', 'submit', 'reject', 'withdraw'],
-        },
-    };
-
-    const { to, names } = rules[target];
-
-    return (
-        transitions.find((t) => t.to?.name && to.includes(norm(t.to.name))) ||
-        transitions.find((t) => names.some((n) => norm(t.name).includes(n)))
-    );
-};
-
-export const applyTransition = async (issueKey: string, transitionId: string) => {
-    await client().post(`/issue/${issueKey}/transitions`, {
-        transition: { id: transitionId },
-    });
-};
-
-export const transitionIssueTo = async (
+export const transitionIssue = async (
     issueKey: string,
-    target: 'in progress' | 'done' | 'cancel'
+    transitionId: string,
+    extraFields?: Record<string, unknown>
 ) => {
-    const transitions = await getTransitions(issueKey);
-    const match = findTransitionForStatus(transitions, target);
-    if (!match) {
-        const available = transitions
-            .map((t) => `${t.name} → ${t.to?.name || '?'}`)
-            .join(', ');
-        throw new Error(
-            `Tidak ada transition ke "${target}" dari status sekarang. Tersedia: ${available || '(kosong)'}`
-        );
+    const api = getClient();
+    const body: { transition: { id: string }; fields?: Record<string, unknown> } = {
+        transition: { id: transitionId },
+    };
+    if (extraFields && Object.keys(extraFields).length > 0) {
+        body.fields = extraFields;
     }
-    await applyTransition(issueKey, match.id);
-    const updated = await getIssue(issueKey);
-    return { transition: match, issue: updated };
+    await api.post(`/issue/${issueKey}/transitions`, body);
 };
 
-export type TaskBaOption = { id: string; label: string };
+/** Pilih transisi dari status Jira saat ini + isi field wajib (End Date, dll.) */
+export const transitionIssueSmart = async (
+    issueKey: string,
+    target: 'toInProgress' | 'toDone' | 'toCancel'
+) => {
+    const transitions = await getIssueTransitions(issueKey, true);
+    let tr = pickTransition(transitions, target);
 
-let cachedTaskBaOptions: TaskBaOption[] | null = null;
-let cacheTime = 0;
-const CACHE_MS = 60 * 60 * 1000;
-
-export const getTaskBaOptions = async (): Promise<TaskBaOption[]> => {
-    if (cachedTaskBaOptions && Date.now() - cacheTime < CACHE_MS) {
-        return cachedTaskBaOptions;
+    if (!tr) {
+        const cfg = getJiraConfig();
+        const fallbackId = cfg.transitions[target];
+        if (!fallbackId) {
+            const available = transitions.map((t) => `${t.id}:${t.name}->${t.to.name}`).join(', ');
+            throw new Error(
+                `Transisi ${target} tidak tersedia untuk ${issueKey}. Tersedia: ${available || 'tidak ada'}`
+            );
+        }
+        const extraFields = buildTransitionFields(target);
+        await transitionIssue(issueKey, fallbackId, extraFields);
+        return;
     }
-    const project = process.env.JIRA_DEFAULT_PROJECT || 'BATB';
-    const issueType = process.env.JIRA_DEFAULT_ISSUE_TYPE || 'Task';
-    const { data } = await client().get('/issue/createmeta', {
-        params: {
-            projectKeys: project,
-            issuetypeNames: issueType,
-            expand: 'projects.issuetypes.fields',
-        },
+
+    const extraFields = buildTransitionFields(target, tr);
+    await transitionIssue(issueKey, tr.id, extraFields);
+};
+
+export const formatJiraError = (e: any): string => {
+    const data = e?.response?.data;
+    if (data?.errorMessages?.length) return data.errorMessages.join('; ');
+    if (data?.errors && Object.keys(data.errors).length) {
+        return Object.entries(data.errors)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join('; ');
+    }
+    return e?.message || 'Error Jira';
+};
+
+/** Hapus issue permanen di Jira (butuh permission Delete issues) */
+export const deleteJiraIssue = async (issueKey: string, deleteSubtasks = true) => {
+    const api = getClient();
+    await api.delete(`/issue/${issueKey}`, {
+        params: { deleteSubtasks: deleteSubtasks ? 'true' : 'false' },
     });
-    const fields = data.projects?.[0]?.issuetypes?.[0]?.fields || {};
-    const baField = fields.customfield_13149;
-    const options: TaskBaOption[] = (baField?.allowedValues || []).map((v: any) => ({
-        id: String(v.id),
-        label: String(v.value || v.name),
-    }));
-    cachedTaskBaOptions = options;
-    cacheTime = Date.now();
-    return options;
 };
 
-export type CreateTaskInput = {
-    summary: string;
-    description?: string;
-    startDate?: string; // YYYY-MM-DD
-    durationMinutes?: number;
-    taskBaOptionId?: string;
-    priorityId?: string;
+export const transitionByEnv = async (
+    issueKey: string,
+    which: 'toInProgress' | 'toDone' | 'toCancel'
+) => {
+    await transitionIssueSmart(issueKey, which);
 };
 
-export const createTask = async (input: CreateTaskInput) => {
-    const project = process.env.JIRA_DEFAULT_PROJECT || 'BATB';
-    const issueType = process.env.JIRA_DEFAULT_ISSUE_TYPE || 'Task';
-    const startDate = input.startDate || new Date().toISOString().slice(0, 10);
-    const duration = input.durationMinutes ?? Number(process.env.JIRA_DEFAULT_DURATION_MINUTES || 60);
-    const taskBaId = input.taskBaOptionId || process.env.JIRA_DEFAULT_TASK_BA_ID;
-    const desc = input.description || input.summary;
+let cachedTaskBAOptions: string[] | null = null;
 
-    if (!taskBaId) {
-        throw new Error('JIRA_DEFAULT_TASK_BA_ID belum di-set di .env');
+/** Opsi dropdown "Task Business Analyst" dari Jira */
+export const getTaskBAOptions = async (): Promise<string[]> => {
+    if (cachedTaskBAOptions?.length) return cachedTaskBAOptions;
+
+    const meta = await getCreateMeta();
+    const found = findFieldsByLabel(meta, ['Task Business Analyst']);
+    const field = found['Task Business Analyst'];
+    if (!field?.allowedValues?.length) {
+        throw new Error('Opsi Task Business Analyst tidak ditemukan di Jira createmeta');
     }
 
-    const fields: Record<string, unknown> = {
-        project: { key: project },
-        issuetype: { name: issueType },
-        summary: input.summary,
-        description: adfParagraph(desc),
-        priority: { id: input.priorityId || process.env.JIRA_DEFAULT_PRIORITY_ID || '4' },
-        customfield_13444: startDate,
-        customfield_13158: duration,
-        customfield_13149: { id: taskBaId },
-    };
+    cachedTaskBAOptions = field.allowedValues
+        .map((v: { value?: string; name?: string }) => v.value || v.name)
+        .filter((x): x is string => !!x);
 
-    const { data } = await client().post('/issue', { fields });
-    const key = data.key as string;
-    return {
-        key,
-        url: issueBrowseUrl(key),
-        issue: await getIssue(key),
-    };
+    return cachedTaskBAOptions;
 };

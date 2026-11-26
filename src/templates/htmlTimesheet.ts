@@ -290,7 +290,7 @@ export const generateTimesheetHtml = (employee: any, tasks: Task[], overtimeTask
                 <tr><td class="recap-label">H</td><td style="text-align:left;">Holiday</td><td class="ctr">-</td><td class="ctr">${stats.h}</td></tr>
                 <tr><td class="recap-label">U</td><td style="text-align:left;">Unpaid Leave</td><td class="ctr">-</td><td class="ctr">${stats.u}</td></tr>
                 <tr><td class="recap-label">C</td><td style="text-align:left;">Comp. Off</td><td class="ctr">-</td><td class="ctr">${stats.c}</td></tr>
-                <tr class="bg-gray" style="font-weight:bold;"><td colspan="2" style="text-align:center;">Total</td><td class="ctr">${stats.wh + stats.ot}</td><td class="ctr">${stats.totalDays + stats.al + stats.s + stats.h + stats.u + stats.c}</td></tr>
+                <tr class="bg-gray" style="font-weight:bold;"><td colspan="2" style="text-align:center;">Total</td><td class="ctr">${stats.wh + stats.ot}</td><td class="ctr">${stats.totalDays}</td></tr>
               </tbody>
             </table>
             <div class="sign-area">

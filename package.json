@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon src/index.ts"
+    "dev": "nodemon src/index.ts",
+    "jira:discover": "ts-node src/scripts/discoverJiraFields.ts",
+    "db:check-bot-tasks": "ts-node src/scripts/checkBotTasksDb.ts",
+    "bot:dev": "nodemon src/index.ts"
   },
   "keywords": [],
   "author": "",
@@ -26,6 +29,7 @@
     "multer": "^2.0.2",
     "nodemailer": "^7.0.12",
     "puppeteer-core": "^24.34.0",
+    "telegraf": "^4.16.3",
     "xendit-node": "^7.0.0"
   },
   "devDependencies": {

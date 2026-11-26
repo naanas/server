@@ -1,22 +1,22 @@
-import express from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
+
+// Muat .env dulu sebelum modul lain membaca process.env
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+import express from 'express';
+import cors from 'cors';
 
 // Routes
 import authRoutes from './routes/authRoutes';
 import paymentRoutes from './routes/paymentRoutes';
 import dataRoutes from './routes/dataRoutes';
 import toolRoutes from './routes/toolRoutes';
+import jiraRoutes from './routes/jiraRoutes';
 import telegramRoutes from './routes/telegramRoutes';
-import { startTelegramPolling } from './services/telegramService';
-import { restoreScheduledJobs } from './services/taskScheduleService';
+import { startTelegramPolling } from './bot/telegramBot';
 
 const app = express();
-
-if (process.env.NODE_ENV !== 'production') {
-    dotenv.config({ path: path.resolve(__dirname, '../.env') });
-}
 
 // Middleware
 app.use(cors({
@@ -32,6 +32,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api', dataRoutes);
 app.use('/api', toolRoutes);
+app.use('/api/jira', jiraRoutes);
 app.use('/api/telegram', telegramRoutes);
 
 // Root
@@ -43,9 +44,10 @@ if (process.env.NODE_ENV !== 'production') {
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
         console.log(`🚀 Server running on http://localhost:${PORT}`);
-        restoreScheduledJobs();
-        if (process.env.TELEGRAM_POLLING === 'true') {
-            startTelegramPolling();
+        if (process.env.TELEGRAM_MODE !== 'webhook') {
+            void startTelegramPolling();
+        } else {
+            console.log('ℹ️ TELEGRAM_MODE=webhook — polling dimatikan. Set webhook ke /api/telegram/webhook');
         }
     });
 }

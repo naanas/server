@@ -16,6 +16,5 @@ export const generatePreview = (
         return generateTimesheetHtml(employee, tasks, overtimeTasks, holidays);
     }
     
-    // Mandays biasanya tidak butuh data libur (kecuali mau ditambah nanti)
-    return generateMandaysHtml(employee, tasks, overtimeTasks);
+    return generateMandaysHtml(employee, tasks, overtimeTasks, holidays);
 };
