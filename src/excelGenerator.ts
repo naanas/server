@@ -63,6 +63,10 @@ const loadTemplate = async (keepSheet: string) => {
         if (ws.name !== SHEET_DATA && ws.name !== keepSheet) wb.removeWorksheet(ws.id);
     }
     const target = wb.getWorksheet(keepSheet)!;
+    // Nama khusus custom view Excel ("Z_<GUID>_.wvu.*") kehilangan scope-nya setelah
+    // dibaca ExcelJS dan membuat Excel menampilkan "repairing unreadable content".
+    const names = wb.definedNames as any;
+    names.model = names.model.filter((n: { name: string }) => !n.name.includes('.wvu.'));
     wb.worksheets.forEach((ws) => { (ws.pageSetup as any).useFirstPageNumber = false; });
     wb.views = [{ x: 0, y: 0, width: 28800, height: 16000, firstSheet: 0, activeTab: wb.worksheets.indexOf(target), visibility: 'visible' }];
     wb.calcProperties = { fullCalcOnLoad: true };
